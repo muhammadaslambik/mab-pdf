@@ -3,6 +3,7 @@ import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+export const pdfjsLib = pdfjs;
 
 /** Buka dengan pdf-lib (untuk memodifikasi/menyimpan). */
 export async function loadPdf(file: File): Promise<PDFDocument> {
@@ -14,12 +15,12 @@ export async function loadPdf(file: File): Promise<PDFDocument> {
 }
 
 /** Buka dengan pdf.js (untuk render / ekstrak teks). */
-export async function openPdfJs(file: File) {
+export async function openPdfJs(file: File, password?: string) {
   const data = new Uint8Array(await file.arrayBuffer());
   try {
-    return await pdfjs.getDocument({ data }).promise;
+    return await pdfjs.getDocument({ data, password }).promise;
   } catch (e: any) {
-    if (e?.name === 'PasswordException') throw new Error(`"${file.name}" terkunci password.`);
+    if (e?.name === 'PasswordException') throw new Error(e.code === 2 ? 'Password salah. Coba lagi.' : `"${file.name}" terkunci password.`);
     throw new Error(`"${file.name}" tidak bisa dibaca. File mungkin rusak.`);
   }
 }
@@ -37,7 +38,7 @@ export async function renderPage(page: pdfjs.PDFPageProxy, scale: number, maxPix
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  await page.render({ canvasContext: ctx, canvas, viewport: vp } as any).promise;
   return canvas;
 }
 

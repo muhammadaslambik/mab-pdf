@@ -2,23 +2,29 @@
   "name": "mab-pdf",
   "version": "0.1.0",
   "private": true,
-  "description": "mab-pdf: utilitas PDF gratis, diproses 100% di perangkat pengguna (client-side), bisa di-instal sebagai PWA.",
+  "description": "MAB-PDF: utilitas PDF gratis, diproses 100% di perangkat pengguna (client-side), bisa di-instal sebagai PWA.",
   "license": "AGPL-3.0-or-later",
-  "repository": { "type": "git", "url": "git+https://github.com/muhammadaslambik/mab-pdf.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muhammadaslambik/mab-pdf.git"
+  },
   "homepage": "https://muhammadaslambik.github.io/mab-pdf/",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "node scripts/setup-wasm.mjs"
   },
   "dependencies": {
     "fflate": "0.8.2",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "4.10.38",
+    "pptxgenjs": "4.0.1",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "tesseract.js": "5.1.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
@@ -28,5 +34,8 @@
     "vite": "^5.4.11",
     "vite-plugin-pwa": "^0.21.1",
     "workbox-window": "^7.3.0"
+  },
+  "optionalDependencies": {
+    "@neslinesli93/qpdf-wasm": "*"
   }
 }

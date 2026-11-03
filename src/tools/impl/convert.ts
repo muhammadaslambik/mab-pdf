@@ -80,7 +80,7 @@ export const pdfToJpg: RunFn = async ([file], o, ctx) => {
   }
   await doc.destroy();
   if (outs.length === 1)
-    return { files: [{ name: outs[0].name, blob: new Blob([outs[0].data], { type: 'image/jpeg' }) }] };
+    return { files: [{ name: outs[0].name, blob: new Blob([outs[0].data as BlobPart], { type: 'image/jpeg' }) }] };
   return zipResult(outs, `${baseName(file.name)}-jpg.zip`);
 };
 

@@ -30,15 +30,15 @@ export default function App() {
 
   return (
     <>
-      <header className="top">
-        <a href="#/" className="logo"><img src="./icon.svg" alt="" width={28} height={28} />mab-pdf</a>
+      <header className="top wrap">
+        <a href="#/" className="logo"><img src="./icon.svg" alt="" width={28} height={28} />MAB-PDF</a>
         {installEvt && <button className="btn-install" onClick={install}>Pasang aplikasi</button>}
       </header>
 
       {tool ? <ToolPage key={tool.id} tool={tool} /> : <Home />}
 
       <footer className="foot">
-        <p>mab-pdf berjalan sepenuhnya di browser Anda. Setelah dimuat, banyak alat tetap bisa dipakai tanpa internet.</p>
+        <p>MAB-PDF berjalan sepenuhnya di browser Anda. Setelah dimuat, banyak alat tetap bisa dipakai tanpa internet.</p>
         {isIOS && !standalone && <p>iPhone/iPad: ketuk Bagikan, lalu “Tambah ke Layar Utama” untuk memasang.</p>}
         <p><a href="https://github.com/muhammadaslambik/mab-pdf" target="_blank" rel="noreferrer">Kode sumber di GitHub</a></p>
       </footer>

@@ -4,8 +4,18 @@ import { CATEGORIES } from '../tools/types';
 import { defaultOpts } from '../tools/registry';
 import { downloadBlob, formatBytes } from '../lib/util';
 import SignaturePad from './SignaturePad';
+import { ToolIcon, UiIcon } from './icons';
 
 const MAX_BYTES = 300 * 1024 * 1024;
+
+const ACCEPT: Record<ToolDef['accept'], { exts: string[]; mime: string; label: string; drop: string }> = {
+  pdf: { exts: ['.pdf'], mime: 'application/pdf', label: 'PDF', drop: 'Pilih file PDF' },
+  image: { exts: [], mime: 'image/*', label: 'gambar (JPG, PNG, WebP)', drop: 'Pilih gambar' },
+  docx: { exts: ['.docx'], mime: '', label: 'dokumen Word (.docx)', drop: 'Pilih file Word (.docx)' },
+  xlsx: { exts: ['.xlsx', '.xlsm', '.csv'], mime: '', label: 'spreadsheet (.xlsx atau .csv)', drop: 'Pilih file Excel (.xlsx) atau CSV' },
+  pptx: { exts: ['.pptx'], mime: '', label: 'presentasi (.pptx)', drop: 'Pilih file PowerPoint (.pptx)' },
+  html: { exts: ['.html', '.htm', '.txt'], mime: '', label: 'HTML atau teks', drop: 'Pilih file HTML (opsional)' }
+};
 
 function Field({ f, value, onChange }: { f: FieldDef; value: any; onChange: (v: any) => void }) {
   const id = `f-${f.key}`;
@@ -14,6 +24,12 @@ function Field({ f, value, onChange }: { f: FieldDef; value: any; onChange: (v: 
       <label htmlFor={id}>{f.label}</label>
       {f.type === 'text' && (
         <input id={id} type="text" value={value ?? ''} placeholder={f.placeholder} onChange={(e) => onChange(e.target.value)} />
+      )}
+      {f.type === 'password' && (
+        <input id={id} type="password" autoComplete="off" value={value ?? ''} onChange={(e) => onChange(e.target.value)} />
+      )}
+      {f.type === 'textarea' && (
+        <textarea id={id} rows={5} value={value ?? ''} placeholder={f.placeholder} onChange={(e) => onChange(e.target.value)} />
       )}
       {f.type === 'number' && (
         <input id={id} type="number" value={value ?? ''} min={f.min} max={f.max} step={f.step ?? 1}
@@ -42,16 +58,18 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
   const cancelled = useRef(false);
   const Custom = useMemo(() => (tool.custom ? lazy(tool.custom) : null), [tool]);
 
-  const okType = (f: File) =>
-    tool.accept === 'pdf'
-      ? f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
-      : f.type.startsWith('image/');
+  const acc = ACCEPT[tool.accept];
+  const okType = (f: File) => {
+    const name = f.name.toLowerCase();
+    if (tool.accept === 'image') return f.type.startsWith('image/');
+    return acc.exts.some((e) => name.endsWith(e)) || (!!acc.mime && f.type === acc.mime);
+  };
 
   const addFiles = (list: FileList | File[] | null) => {
     if (!list) return;
     const arr = [...list];
     const valid = arr.filter(okType);
-    if (!valid.length) return setError(tool.accept === 'pdf' ? 'File harus berformat PDF.' : 'File harus berupa gambar (JPG, PNG, WebP).');
+    if (!valid.length) return setError(`File harus berupa ${acc.label}.`);
     if (valid.some((f) => f.size > MAX_BYTES)) return setError('Ukuran file melebihi 300 MB. Coba file yang lebih kecil agar perangkat Anda tidak kehabisan memori.');
     setError(arr.length !== valid.length ? 'Sebagian file dilewati karena formatnya tidak sesuai.' : '');
     setResult(null);
@@ -100,10 +118,11 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
 
   return (
     <main className="tool" style={{ ['--c' as any]: cat.color }}>
-      <a href="#/" className="back">← Semua alat</a>
+      <a href="#/" className="back"><UiIcon name="back" size={16} /> Semua alat</a>
       <header className="tool-head">
-        <span className="tile-icon big" aria-hidden>{tool.icon}</span>
+        <span className="tile-icon big" aria-hidden><ToolIcon id={tool.id} size={30} /></span>
         <div>
+          <span className="crumb">{cat.label}</span>
           <h1>{tool.title}{tool.status === 'beta' && <span className="badge">Beta</span>}</h1>
           <p>{tool.desc}</p>
         </div>
@@ -117,7 +136,7 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
         </section>
       ) : (
         <>
-          <p className="privacy">🔒 File diproses di perangkat Anda dan tidak pernah diunggah ke server.</p>
+          <p className="privacy"><UiIcon name="lock" size={15} /> File diproses di perangkat Anda dan tidak pernah diunggah ke server.</p>
 
           {!result && (
             <label
@@ -128,11 +147,12 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
             >
               <input
                 type="file" hidden multiple={tool.multiple}
-                accept={tool.accept === 'pdf' ? 'application/pdf,.pdf' : 'image/*'}
+                accept={[acc.mime, ...acc.exts].filter(Boolean).join(',')}
                 {...(tool.capture ? { capture: 'environment' as const } : {})}
                 onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
               />
-              <strong>{tool.capture ? 'Ambil foto atau pilih gambar' : tool.accept === 'pdf' ? `Pilih file PDF${tool.multiple ? ' (bisa banyak)' : ''}` : 'Pilih gambar (bisa banyak)'}</strong>
+              <span className="drop-icon"><UiIcon name="upload" size={26} /></span>
+              <strong>{tool.capture ? 'Ambil foto atau pilih gambar' : `${acc.drop}${tool.multiple ? ' (bisa banyak)' : ''}`}</strong>
               <span>atau seret file ke sini · maksimal 300 MB</span>
             </label>
           )}
@@ -155,7 +175,7 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
             </ul>
           )}
 
-          {files.length > 0 && !result && Custom && (
+          {files.length >= min && files.length > 0 && Custom && (
             <section className="panel">
               <Suspense fallback={<p>Memuat…</p>}>
                 <Custom {...customProps} />

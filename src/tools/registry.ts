@@ -9,16 +9,14 @@ const lazy =
 const pages = () => import('./impl/pages');
 const stamp = () => import('./impl/stamp');
 const convert = () => import('./impl/convert');
+const toPdf = () => import('./impl/toPdf');
+const fromPdf = () => import('./impl/fromPdf');
+const secure = () => import('./impl/secure');
 
 const PAGES: FieldDef = {
   type: 'text', key: 'pages', label: 'Halaman', default: 'all', placeholder: 'all',
   hint: 'Contoh: 1-3,5,8-  (ketik "all" untuk semua halaman)'
 };
-
-const soon = (
-  id: string, category: Category, title: string, desc: string, icon: string,
-  accept: 'pdf' | 'image', plan: string, keywords: string[] = []
-): ToolDef => ({ id, category, title, desc, icon, accept, keywords, multiple: false, status: 'soon', plan });
 
 export const TOOLS: ToolDef[] = [
   /* ===== Atur PDF ===== */
@@ -77,10 +75,20 @@ export const TOOLS: ToolDef[] = [
       { value: 'recommended', label: 'Disarankan (seimbang)' },
       { value: 'light', label: 'Ringan (kualitas tinggi)' }] }]
   },
-  soon('repair', 'optimize', 'Perbaiki PDF', 'Pulihkan PDF yang rusak.', '🩹', 'pdf',
-    'qpdf-wasm (rebuild xref). Dijadwalkan fase 2.', ['repair', 'rusak']),
-  soon('ocr', 'optimize', 'OCR PDF', 'Ubah PDF hasil scan jadi teks yang bisa dicari.', '🔎', 'pdf',
-    'tesseract.js (Wasm) + teks tak terlihat via pdf-lib. Dijadwalkan fase 2.', ['ocr', 'teks', 'scan']),
+  {
+    id: 'repair', category: 'optimize', title: 'Perbaiki PDF', icon: '🩹',
+    desc: 'Pulihkan PDF yang rusak atau tidak bisa dibuka.', keywords: ['repair', 'rusak', 'corrupt', 'perbaiki'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Perbaiki', run: lazy(secure, 'repair')
+  },
+  {
+    id: 'ocr', category: 'optimize', title: 'OCR PDF', icon: '🔎',
+    desc: 'Ubah PDF hasil scan menjadi PDF yang teksnya bisa dicari.', keywords: ['ocr', 'teks', 'scan', 'baca'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Jalankan OCR', run: lazy(secure, 'ocr'),
+    fields: [{ type: 'select', key: 'lang', label: 'Bahasa dokumen', default: 'ind+eng', options: [
+      { value: 'ind+eng', label: 'Indonesia + Inggris' }, { value: 'ind', label: 'Indonesia' }, { value: 'eng', label: 'Inggris' },
+      { value: 'spa', label: 'Spanyol' }, { value: 'fra', label: 'Prancis' }, { value: 'deu', label: 'Jerman' },
+      { value: 'por', label: 'Portugis' }, { value: 'ita', label: 'Italia' }, { value: 'nld', label: 'Belanda' }, { value: 'tur', label: 'Turki' }] }]
+  },
 
   /* ===== Ke PDF ===== */
   {
@@ -93,14 +101,36 @@ export const TOOLS: ToolDef[] = [
       { type: 'number', key: 'margin', label: 'Margin (pt)', default: 0, min: 0, max: 100 }
     ]
   },
-  soon('word-to-pdf', 'to-pdf', 'WORD ke PDF', 'Ubah dokumen Word menjadi PDF.', '📘', 'pdf',
-    'mammoth (docx→HTML) + render PDF; atau LibreOffice-Wasm untuk fidelity tinggi. Fase 3.', ['docx', 'doc']),
-  soon('ppt-to-pdf', 'to-pdf', 'POWERPOINT ke PDF', 'Ubah presentasi menjadi PDF.', '📙', 'pdf',
-    'Butuh LibreOffice-Wasm (besar). Eksperimental, fase 4.', ['pptx', 'slide']),
-  soon('excel-to-pdf', 'to-pdf', 'EXCEL ke PDF', 'Ubah spreadsheet menjadi PDF.', '📗', 'pdf',
-    'SheetJS → tabel HTML → PDF. Fase 3.', ['xlsx', 'xls']),
-  soon('html-to-pdf', 'to-pdf', 'HTML ke PDF', 'Ubah halaman HTML menjadi PDF.', '🌐', 'pdf',
-    'html2canvas + jsPDF atau window.print. Fase 3.', ['web']),
+  {
+    id: 'word-to-pdf', category: 'to-pdf', title: 'WORD ke PDF', icon: '📘',
+    desc: 'Ubah dokumen Word (.docx) menjadi PDF.', keywords: ['docx', 'doc', 'word'],
+    accept: 'docx', multiple: false, status: 'beta', actionLabel: 'Ubah ke PDF', run: lazy(toPdf, 'wordToPdf'),
+    fields: [{ type: 'select', key: 'size', label: 'Ukuran kertas', default: 'a4', options: [{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }] }]
+  },
+  {
+    id: 'ppt-to-pdf', category: 'to-pdf', title: 'POWERPOINT ke PDF', icon: '📙',
+    desc: 'Ubah presentasi (.pptx) menjadi PDF.', keywords: ['pptx', 'slide', 'presentasi', 'powerpoint'],
+    accept: 'pptx', multiple: false, status: 'beta', actionLabel: 'Ubah ke PDF', run: lazy(toPdf, 'pptToPdf')
+  },
+  {
+    id: 'excel-to-pdf', category: 'to-pdf', title: 'EXCEL ke PDF', icon: '📗',
+    desc: 'Ubah spreadsheet (.xlsx atau .csv) menjadi PDF.', keywords: ['xlsx', 'xls', 'csv', 'spreadsheet', 'tabel'],
+    accept: 'xlsx', multiple: false, status: 'beta', actionLabel: 'Ubah ke PDF', run: lazy(toPdf, 'excelToPdf'),
+    fields: [
+      { type: 'select', key: 'orient', label: 'Orientasi', default: 'auto', options: [{ value: 'auto', label: 'Otomatis' }, { value: 'portrait', label: 'Tegak' }, { value: 'landscape', label: 'Mendatar' }] },
+      { type: 'select', key: 'header', label: 'Baris pertama', default: 'yes', options: [{ value: 'yes', label: 'Judul kolom (ditebalkan)' }, { value: 'no', label: 'Data biasa' }] },
+      { type: 'select', key: 'size', label: 'Ukuran kertas', default: 'a4', options: [{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }] }
+    ]
+  },
+  {
+    id: 'html-to-pdf', category: 'to-pdf', title: 'HTML ke PDF', icon: '🌐',
+    desc: 'Ubah file HTML atau teks yang ditempel menjadi PDF.', keywords: ['web', 'html', 'halaman'],
+    accept: 'html', multiple: false, minFiles: 0, status: 'beta', actionLabel: 'Ubah ke PDF', run: lazy(toPdf, 'htmlToPdf'),
+    fields: [
+      { type: 'textarea', key: 'html', label: 'Atau tempel kode HTML / teks di sini', placeholder: '<h1>Judul</h1><p>Isi dokumen…</p>' },
+      { type: 'select', key: 'size', label: 'Ukuran kertas', default: 'a4', options: [{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }] }
+    ]
+  },
 
   /* ===== Dari PDF ===== */
   {
@@ -110,14 +140,33 @@ export const TOOLS: ToolDef[] = [
     fields: [{ type: 'select', key: 'scale', label: 'Kualitas gambar', default: '2', options: [
       { value: '1.5', label: 'Standar (~108 dpi)' }, { value: '2', label: 'Tinggi (~144 dpi)' }, { value: '3', label: 'Sangat tinggi (~216 dpi)' }] }]
   },
-  soon('pdf-to-word', 'from-pdf', 'PDF ke WORD', 'Ubah PDF menjadi dokumen Word.', '📝', 'pdf',
-    'pdfjs getTextContent + library docx. Fase 3.', ['docx']),
-  soon('pdf-to-ppt', 'from-pdf', 'PDF ke POWERPOINT', 'Ubah PDF menjadi slide.', '📊', 'pdf',
-    'pdfjs + pptxgenjs. Fase 3.', ['pptx']),
-  soon('pdf-to-excel', 'from-pdf', 'PDF ke EXCEL', 'Ambil tabel dari PDF ke spreadsheet.', '📈', 'pdf',
-    'pdfjs + heuristik tabel + SheetJS. Fase 3.', ['xlsx', 'tabel']),
-  soon('pdf-to-pdfa', 'from-pdf', 'PDF ke PDF/A', 'Format arsip jangka panjang.', '🏛️', 'pdf',
-    'ghostscript-wasm (AGPL). Fase 4.', ['arsip']),
+  {
+    id: 'pdf-to-word', category: 'from-pdf', title: 'PDF ke WORD', icon: '📝',
+    desc: 'Ubah PDF menjadi dokumen Word (.docx) yang bisa diedit.', keywords: ['docx', 'word', 'edit teks'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Ubah ke Word', run: lazy(fromPdf, 'pdfToWord'),
+    fields: [{ type: 'select', key: 'pagebreak', label: 'Pemisah halaman', default: 'yes', options: [{ value: 'yes', label: 'Pertahankan (satu halaman PDF = satu halaman Word)' }, { value: 'no', label: 'Teks mengalir tanpa pemisah' }] }]
+  },
+  {
+    id: 'pdf-to-ppt', category: 'from-pdf', title: 'PDF ke POWERPOINT', icon: '📊',
+    desc: 'Ubah halaman PDF menjadi slide PowerPoint.', keywords: ['pptx', 'slide', 'presentasi'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Ubah ke PowerPoint', run: lazy(fromPdf, 'pdfToPpt'),
+    fields: [{ type: 'select', key: 'mode', label: 'Hasil slide', default: 'image', options: [{ value: 'image', label: 'Gambar (tampilan akurat)' }, { value: 'text', label: 'Kotak teks yang bisa diedit' }] }]
+  },
+  {
+    id: 'pdf-to-excel', category: 'from-pdf', title: 'PDF ke EXCEL', icon: '📈',
+    desc: 'Ambil tabel dan data dari PDF ke spreadsheet.', keywords: ['xlsx', 'tabel', 'spreadsheet'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Ubah ke Excel', run: lazy(fromPdf, 'pdfToExcel'),
+    fields: [{ type: 'select', key: 'mode', label: 'Susunan sheet', default: 'sheets', options: [{ value: 'sheets', label: 'Satu sheet per halaman' }, { value: 'one', label: 'Semua dalam satu sheet' }] }]
+  },
+  {
+    id: 'pdf-to-pdfa', category: 'from-pdf', title: 'PDF ke PDF/A', icon: '🏛️',
+    desc: 'Format arsip jangka panjang (versi gambar).', keywords: ['arsip', 'pdfa', 'archive'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Ubah ke PDF/A', run: lazy(secure, 'toPdfA'),
+    fields: [
+      { type: 'select', key: 'part', label: 'Standar', default: '2', options: [{ value: '2', label: 'PDF/A-2b (disarankan)' }, { value: '1', label: 'PDF/A-1b' }] },
+      { type: 'select', key: 'quality', label: 'Kualitas gambar', default: 'std', options: [{ value: 'std', label: 'Standar' }, { value: 'high', label: 'Tinggi (file lebih besar)' }] }
+    ]
+  },
 
   /* ===== Edit ===== */
   {
@@ -171,16 +220,36 @@ export const TOOLS: ToolDef[] = [
       PAGES
     ]
   },
-  soon('edit-pdf', 'edit', 'Edit PDF', 'Tambah teks, bentuk, dan gambar.', '✏️', 'pdf',
-    'Editor overlay (Konva/fabric.js) + pdf-lib. Fase 2.', ['anotasi', 'teks']),
-  soon('form', 'edit', 'Formulir PDF', 'Isi formulir PDF interaktif.', '📋', 'pdf',
-    'pdf-lib getForm() + flatten. Fase 2.', ['form', 'isi']),
+  {
+    id: 'edit-pdf', category: 'edit', title: 'Edit PDF', icon: '✏️',
+    desc: 'Tambahkan teks, kotak, sorotan, gambar, dan coretan.', keywords: ['anotasi', 'teks', 'tulis', 'edit', 'sorot'],
+    accept: 'pdf', multiple: false, status: 'beta', custom: () => import('../components/EditPdf')
+  },
+  {
+    id: 'form', category: 'edit', title: 'Formulir PDF', icon: '📋',
+    desc: 'Isi kolom formulir PDF interaktif.', keywords: ['form', 'isi', 'formulir'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/FormFiller')
+  },
 
   /* ===== Keamanan ===== */
-  soon('unlock', 'security', 'Buka PDF terkunci', 'Hapus password dari PDF (Anda harus tahu password-nya).', '🔓', 'pdf',
-    'qpdf-wasm --decrypt. Fase 2.', ['password', 'unlock']),
-  soon('protect', 'security', 'Proteksi PDF', 'Kunci PDF dengan password.', '🔒', 'pdf',
-    'qpdf-wasm --encrypt 256. Fase 2.', ['password', 'enkripsi']),
+  {
+    id: 'unlock', category: 'security', title: 'Buka PDF terkunci', icon: '🔓',
+    desc: 'Hapus password dari PDF (Anda harus tahu password-nya).', keywords: ['password', 'unlock', 'kunci', 'buka'],
+    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Buka kunci', run: lazy(secure, 'unlock'),
+    fields: [{ type: 'password', key: 'password', label: 'Password PDF', hint: 'Alat ini tidak menebak password. Anda harus mengetahuinya.' }]
+  },
+  {
+    id: 'protect', category: 'security', title: 'Proteksi PDF', icon: '🔒',
+    desc: 'Kunci PDF dengan password (enkripsi AES-128).', keywords: ['password', 'enkripsi', 'protect', 'kunci'],
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Kunci PDF', run: lazy(secure, 'protect'),
+    fields: [
+      { type: 'password', key: 'user', label: 'Password untuk membuka', hint: 'Gunakan huruf, angka, dan simbol biasa. Jangan sampai lupa.' },
+      { type: 'password', key: 'owner', label: 'Password pemilik (opsional)', hint: 'Dipakai untuk mengubah izin. Kosong = sama dengan password pembuka.' },
+      { type: 'select', key: 'print', label: 'Boleh dicetak', default: 'yes', options: [{ value: 'yes', label: 'Ya' }, { value: 'no', label: 'Tidak' }] },
+      { type: 'select', key: 'copy', label: 'Boleh menyalin teks', default: 'yes', options: [{ value: 'yes', label: 'Ya' }, { value: 'no', label: 'Tidak' }] },
+      { type: 'select', key: 'modify', label: 'Boleh mengubah', default: 'yes', options: [{ value: 'yes', label: 'Ya' }, { value: 'no', label: 'Tidak' }] }
+    ]
+  },
   {
     id: 'sign', category: 'security', title: 'Tanda tangani PDF', icon: '🖋️',
     desc: 'Bubuhkan tanda tangan gambar ke dokumen.', keywords: ['tanda tangan', 'sign', 'ttd', 'signature'],
@@ -195,16 +264,28 @@ export const TOOLS: ToolDef[] = [
       { type: 'number', key: 'width', label: 'Lebar tanda tangan (pt)', default: 150, min: 40, max: 400 }
     ]
   },
-  soon('redact', 'security', 'Samarkan PDF', 'Hapus permanen teks sensitif.', '⬛', 'pdf',
-    'Rasterisasi halaman yang diredaksi (bukan sekadar kotak hitam). Fase 2.', ['redact', 'sensor']),
-  soon('compare', 'security', 'Bandingkan PDF', 'Lihat perbedaan dua PDF.', '⚖️', 'pdf',
-    'pdfjs + diff-match-patch + pixelmatch. Fase 2.', ['compare', 'beda']),
+  {
+    id: 'redact', category: 'security', title: 'Samarkan PDF', icon: '⬛',
+    desc: 'Hapus permanen teks atau area sensitif.', keywords: ['redact', 'sensor', 'hitamkan', 'samar', 'rahasia'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/RedactPdf')
+  },
+  {
+    id: 'compare', category: 'security', title: 'Bandingkan PDF', icon: '⚖️',
+    desc: 'Lihat perbedaan teks atau tampilan dua PDF.', keywords: ['compare', 'beda', 'revisi', 'banding'],
+    accept: 'pdf', multiple: true, minFiles: 2, status: 'beta', custom: () => import('../components/Compare')
+  },
 
   /* ===== AI ===== */
-  soon('summarize', 'ai', 'Perangkum AI', 'Ringkas isi PDF di perangkat Anda.', '✨', 'pdf',
-    'Chrome built-in Summarizer API / WebLLM (WebGPU). Opt-in, fase 4.', ['ringkas', 'summary']),
-  soon('translate', 'ai', 'Terjemahkan PDF', 'Terjemahkan teks PDF antar bahasa.', '🌍', 'pdf',
-    'Chrome Translator API / Bergamot Wasm. Fase 4.', ['translate', 'bahasa']),
+  {
+    id: 'summarize', category: 'ai', title: 'Perangkum AI', icon: '✨',
+    desc: 'Ringkas isi PDF di perangkat Anda.', keywords: ['ringkas', 'summary', 'rangkum', 'ai'],
+    accept: 'pdf', multiple: false, status: 'beta', custom: () => import('../components/AiSummarize')
+  },
+  {
+    id: 'translate', category: 'ai', title: 'Terjemahkan PDF', icon: '🌍',
+    desc: 'Terjemahkan teks PDF antar bahasa.', keywords: ['translate', 'bahasa', 'terjemah'],
+    accept: 'pdf', multiple: false, status: 'beta', custom: () => import('../components/AiTranslate')
+  },
   {
     id: 'pdf-to-markdown', category: 'ai', title: 'PDF ke Markdown', icon: '🧾',
     desc: 'Ekstrak teks PDF menjadi Markdown berstruktur.', keywords: ['markdown', 'md', 'teks', 'ekstrak'],

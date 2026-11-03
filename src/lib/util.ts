@@ -22,14 +22,14 @@ export function downloadBlob(blob: Blob, filename: string) {
 }
 
 export const pdfResult = (bytes: Uint8Array, name: string, note?: string): ToolResult => ({
-  files: [{ name, blob: new Blob([bytes], { type: 'application/pdf' }) }],
+  files: [{ name, blob: new Blob([bytes as BlobPart], { type: 'application/pdf' }) }],
   note
 });
 
 export function zipFiles(files: { name: string; data: Uint8Array }[]): Blob {
   const map: Record<string, Uint8Array> = {};
   for (const f of files) map[f.name] = f.data;
-  return new Blob([zipSync(map, { level: 0 })], { type: 'application/zip' });
+  return new Blob([zipSync(map, { level: 0 }) as BlobPart], { type: 'application/zip' });
 }
 
 export const zipResult = (files: { name: string; data: Uint8Array }[], zipName: string): ToolResult => ({
