@@ -1,7 +1,8 @@
-import { PDFDocument, PDFImage } from 'pdf-lib';
+import { PDFDict, PDFDocument, PDFImage, PDFName, PDFRawStream } from 'pdf-lib';
+import { imageEntries, numOf, readImage } from '../../lib/pdfImages';
 import type { RunFn } from '../types';
-import { canvasToBlob, openPdfJs, releaseCanvas, renderPage } from '../../lib/pdf';
-import { baseName, pdfResult, tick, zipResult } from '../../lib/util';
+import { canvasToBlob, loadPdf, openPdfJs, releaseCanvas, renderPage } from '../../lib/pdf';
+import { baseName, formatBytes, pdfResult, tick, zipResult } from '../../lib/util';
 
 /* ---------- Gambar -> PDF (juga dipakai fitur Pindai) ---------- */
 
@@ -59,9 +60,11 @@ export const imagesToPdf: RunFn = async (files, o, ctx) => {
 
 /* ---------- PDF -> JPG ---------- */
 
+const FMT: Record<string, { mime: string; ext: string; q?: number }> = { jpg: { mime: 'image/jpeg', ext: 'jpg', q: 0.9 }, png: { mime: 'image/png', ext: 'png' }, webp: { mime: 'image/webp', ext: 'webp', q: 0.9 } };
 export const pdfToJpg: RunFn = async ([file], o, ctx) => {
   const doc = await openPdfJs(file);
   const scale = Number(o.scale) || 2;
+  const f = FMT[String(o.format)] ?? FMT.jpg;
   const outs: { name: string; data: Uint8Array }[] = [];
   const pad = String(doc.numPages).length;
   for (let n = 1; n <= doc.numPages; n++) {
@@ -69,142 +72,119 @@ export const pdfToJpg: RunFn = async ([file], o, ctx) => {
     ctx.progress(((n - 1) / doc.numPages) * 95, `Halaman ${n}/${doc.numPages}`);
     const page = await doc.getPage(n);
     const canvas = await renderPage(page, scale);
-    const blob = await canvasToBlob(canvas, 'image/jpeg', 0.9);
-    outs.push({
-      name: `${baseName(file.name)}-${String(n).padStart(pad, '0')}.jpg`,
-      data: new Uint8Array(await blob.arrayBuffer())
-    });
-    releaseCanvas(canvas);
-    page.cleanup();
-    await tick();
+    const blob = await canvasToBlob(canvas, f.mime, f.q);
+    outs.push({ name: `${baseName(file.name)}-${String(n).padStart(pad, '0')}.${f.ext}`, data: new Uint8Array(await blob.arrayBuffer()) });
+    releaseCanvas(canvas); page.cleanup(); await tick();
   }
   await doc.destroy();
-  if (outs.length === 1)
-    return { files: [{ name: outs[0].name, blob: new Blob([outs[0].data as BlobPart], { type: 'image/jpeg' }) }] };
-  return zipResult(outs, `${baseName(file.name)}-jpg.zip`);
+  if (outs.length === 1) return { files: [{ name: outs[0].name, blob: new Blob([outs[0].data as BlobPart], { type: f.mime }) }] };
+  return zipResult(outs, `${baseName(file.name)}-${f.ext}.zip`);
 };
 
-/* ---------- Kompres (rasterisasi halaman) ---------- */
+/* ---------- Kompres cerdas: perkecil gambar di dalam PDF, teks tetap vektor ---------- */
 
-const PRESETS: Record<string, { scale: number; quality: number }> = {
-  extreme: { scale: 1.0, quality: 0.5 },
-  recommended: { scale: 1.5, quality: 0.7 },
-  light: { scale: 2.0, quality: 0.85 }
+const LEVELS: Record<string, { side: number; q: number }> = {
+  extreme: { side: 1000, q: 0.5 }, recommended: { side: 1600, q: 0.68 }, light: { side: 2400, q: 0.82 }
 };
+const RASTER: Record<string, { scale: number; quality: number }> = { extreme: { scale: 1.0, quality: 0.5 }, recommended: { scale: 1.5, quality: 0.7 }, light: { scale: 2.0, quality: 0.85 } };
 
-export const compress: RunFn = async ([file], o, ctx) => {
-  const { scale, quality } = PRESETS[String(o.level)] ?? PRESETS.recommended;
+async function smartCompress(file: File, level: string, ctx: Parameters<RunFn>[2]) {
+  const { side, q } = LEVELS[level] ?? LEVELS.recommended;
+  const pdf = await loadPdf(file);
+  const pc = pdf.context;
+  const entries = imageEntries(pc);
+  let changed = 0, saved = 0;
+  for (let i = 0; i < entries.length; i++) {
+    ctx.check(); ctx.progress((i / Math.max(1, entries.length)) * 90, `Gambar ${i + 1}/${entries.length}`);
+    const [ref, obj] = entries[i];
+    try {
+      const w0 = numOf(obj.dict, 'Width') ?? 0, h0 = numOf(obj.dict, 'Height') ?? 0;
+      const k = Math.min(1, side / Math.max(w0, h0, 1));
+      if (k === 1 && obj.getContentsSize() < w0 * h0 * 0.12) continue; // sudah ringan
+      const img = await readImage(pc, obj);
+      if (!img) continue;
+      const nw = Math.max(1, Math.round(img.w * k)), nh = Math.max(1, Math.round(img.h * k));
+      const out = document.createElement('canvas'); out.width = nw; out.height = nh;
+      const g = out.getContext('2d')!; g.imageSmoothingQuality = 'high'; g.fillStyle = '#fff'; g.fillRect(0, 0, nw, nh);
+      g.drawImage(img.source, 0, 0, nw, nh);
+      if ('close' in img.source) img.source.close();
+      const blob = await canvasToBlob(out, 'image/jpeg', q);
+      releaseCanvas(out);
+      if (blob.size > img.origSize * (img.isDct ? 0.92 : 0.7)) continue; // tidak sepadan
+      const nd = pc.obj({ Type: 'XObject', Subtype: 'Image', Width: nw, Height: nh, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' }) as PDFDict;
+      for (const key of ['SMask', 'Intent', 'Interpolate']) { const v = obj.dict.get(PDFName.of(key)); if (v) nd.set(PDFName.of(key), v); }
+      pc.assign(ref, PDFRawStream.of(nd, new Uint8Array(await blob.arrayBuffer())));
+      changed++; saved += img.origSize - blob.size;
+    } catch { continue; }
+    await tick();
+  }
+  pdf.setProducer('MAB-PDF');
+  ctx.progress(95, 'Menyimpan');
+  return { bytes: await pdf.save({ useObjectStreams: true }), changed, total: entries.length, saved };
+}
+
+async function rasterCompress(file: File, level: string, ctx: Parameters<RunFn>[2]) {
+  const { scale, quality } = RASTER[level] ?? RASTER.recommended;
   const doc = await openPdfJs(file);
   const out = await PDFDocument.create();
   for (let n = 1; n <= doc.numPages; n++) {
-    ctx.check();
-    ctx.progress(((n - 1) / doc.numPages) * 95, `Halaman ${n}/${doc.numPages}`);
+    ctx.check(); ctx.progress(((n - 1) / doc.numPages) * 95, `Halaman ${n}/${doc.numPages}`);
     const page = await doc.getPage(n);
     const base = page.getViewport({ scale: 1 });
     const canvas = await renderPage(page, scale);
-    const blob = await canvasToBlob(canvas, 'image/jpeg', quality);
-    const img = await out.embedJpg(new Uint8Array(await blob.arrayBuffer()));
-    out.addPage([base.width, base.height]).drawImage(img, {
-      x: 0, y: 0, width: base.width, height: base.height
-    });
-    releaseCanvas(canvas);
-    page.cleanup();
-    await tick();
+    const img = await out.embedJpg(new Uint8Array(await (await canvasToBlob(canvas, 'image/jpeg', quality)).arrayBuffer()));
+    out.addPage([base.width, base.height]).drawImage(img, { x: 0, y: 0, width: base.width, height: base.height });
+    releaseCanvas(canvas); page.cleanup(); await tick();
   }
   await doc.destroy();
-  out.setProducer('mab-pdf');
-  const bytes = await out.save({ useObjectStreams: true });
-  if (bytes.byteLength >= file.size)
-    return {
-      files: [{ name: file.name, blob: file }],
-      note: 'File ini sudah cukup kecil. Hasil kompres justru lebih besar, jadi file asli dikembalikan.'
-    };
-  return pdfResult(
-    bytes,
-    `${baseName(file.name)}-kompres.pdf`,
-    'Catatan: semua halaman diubah menjadi gambar, jadi teks tidak bisa diseleksi atau dicari. Jalankan OCR sesudahnya bila perlu.'
-  );
+  out.setProducer('MAB-PDF');
+  return out.save({ useObjectStreams: true });
+}
+
+export const compress: RunFn = async ([file], o, ctx) => {
+  const level = String(o.level || 'recommended');
+  const name = `${baseName(file.name)}-kompres.pdf`;
+  const keep = (note: string) => ({ files: [{ name: file.name, blob: file }], note });
+  if (o.mode === 'raster') {
+    const bytes = await rasterCompress(file, level, ctx);
+    if (bytes.byteLength >= file.size) return keep('File ini sudah cukup kecil, hasil kompres justru lebih besar, jadi file asli dikembalikan.');
+    return pdfResult(bytes, name, 'Mode gambar: semua halaman dijadikan gambar sehingga teks tidak bisa diseleksi. Jalankan OCR sesudahnya bila perlu.');
+  }
+  const r = await smartCompress(file, level, ctx);
+  if (r.bytes.byteLength >= file.size * 0.98) {
+    return keep(r.total
+      ? 'Gambar di dalam PDF ini sudah efisien, jadi tidak ada yang bisa dihemat tanpa merusak kualitas. Coba tingkat "Maksimal" atau mode "ubah ke gambar".'
+      : 'PDF ini tidak berisi gambar besar (isinya teks/vektor), jadi sudah sekecil yang aman. Coba mode "ubah ke gambar" bila perlu lebih kecil.');
+  }
+  return pdfResult(r.bytes, name, `${r.changed} dari ${r.total} gambar dioptimalkan (hemat ±${formatBytes(r.saved)}). Teks tetap bisa diseleksi dan dicari.`);
 };
 
-/* ---------- PDF -> Markdown (heuristik ukuran font) ---------- */
+/* ---------- PDF -> Markdown (judul, daftar, tabel) ---------- */
 
-type Line = { y: number; size: number; text: string };
-
-export const pdfToMarkdown: RunFn = async ([file], _o, ctx) => {
-  const doc = await openPdfJs(file);
-  const pages: Line[][] = [];
-  const sizeCount = new Map<number, number>();
-
-  for (let n = 1; n <= doc.numPages; n++) {
-    ctx.check();
-    ctx.progress(((n - 1) / doc.numPages) * 90, `Membaca halaman ${n}/${doc.numPages}`);
-    const page = await doc.getPage(n);
-    const tc = await page.getTextContent();
-    const rows: { y: number; size: number; parts: { x: number; w: number; s: string }[] }[] = [];
-    for (const it of tc.items as any[]) {
-      if (typeof it.str !== 'string' || !it.str.trim()) continue;
-      const x = it.transform[4];
-      const y = it.transform[5];
-      const size = Math.round(Math.hypot(it.transform[2], it.transform[3]));
-      let row = rows.find((r) => Math.abs(r.y - y) < 2);
-      if (!row) rows.push((row = { y, size, parts: [] }));
-      row.size = Math.max(row.size, size);
-      row.parts.push({ x, w: it.width ?? 0, s: it.str });
-      sizeCount.set(size, (sizeCount.get(size) ?? 0) + it.str.length);
-    }
-    rows.sort((a, b) => b.y - a.y);
-    pages.push(
-      rows.map((r) => {
-        r.parts.sort((a, b) => a.x - b.x);
-        let text = '';
-        let end = -Infinity;
-        for (const p of r.parts) {
-          if (text && p.x - end > r.size * 0.15 && !text.endsWith(' ') && !p.s.startsWith(' ')) text += ' ';
-          text += p.s;
-          end = p.x + p.w;
-        }
-        return { y: r.y, size: r.size, text: text.trim() };
-      })
-    );
-    page.cleanup();
-    await tick();
-  }
-  await doc.destroy();
-
-  let body = 12;
-  let best = -1;
-  sizeCount.forEach((c, s) => { if (c > best) { best = c; body = s; } });
-
+export const pdfToMarkdown: RunFn = async ([file], o, ctx) => {
+  const { extractDoc, NO_TEXT } = await import('../../lib/pdfText');
+  const { pages, hasText } = await extractDoc(file, ctx.progress, ctx.check);
+  if (!hasText) throw new Error(NO_TEXT);
   const blocks: string[] = [];
-  let para = '';
-  const flush = () => { if (para.trim()) blocks.push(para.trim()); para = ''; };
-
-  for (const lines of pages) {
-    let prevY: number | null = null;
-    for (const ln of lines) {
-      const ratio = ln.size / body;
-      const gap = prevY === null ? 0 : prevY - ln.y;
-      const bullet = /^[•●▪·\-–*]\s+/.test(ln.text);
-      if (ratio >= 1.1 && ln.text.length < 140) {
-        flush();
-        const lvl = ratio >= 1.5 ? '#' : ratio >= 1.25 ? '##' : '###';
-        blocks.push(`${lvl} ${ln.text}`);
-      } else if (bullet) {
-        flush();
-        blocks.push(`- ${ln.text.replace(/^[•●▪·\-–*]\s+/, '')}`);
-      } else {
-        if (gap > ln.size * 1.8) flush();
-        para += (para && !para.endsWith('-') ? ' ' : '') + ln.text;
-      }
-      prevY = ln.y;
+  const tableMd = (rows: string[][]) => {
+    const n = Math.max(...rows.map((r) => r.length));
+    const row = (r: string[]) => '| ' + Array.from({ length: n }, (_, k) => (r[k] ?? '').replace(/\|/g, '\\|')).join(' | ') + ' |';
+    return [row(rows[0]), '|' + ' --- |'.repeat(n), ...rows.slice(1).map(row)].join('\n');
+  };
+  pages.forEach((pg, i) => {
+    if (o.marker === 'yes' && i > 0) blocks.push(`<!-- Halaman ${i + 1} -->`);
+    let rows: string[][] = [], list: string[] = [];
+    const flush = () => { if (rows.length) blocks.push(tableMd(rows)); if (list.length) blocks.push(list.join('\n')); rows = []; list = []; };
+    for (const p of pg.paras) {
+      if (p.kind === 'row') { if (list.length) flush(); rows.push(p.cells ?? [p.text]); continue; }
+      if (p.kind === 'li') { if (rows.length) flush(); list.push(`- ${p.text}`); continue; }
+      flush();
+      blocks.push(p.kind === 'h1' ? `# ${p.text}` : p.kind === 'h2' ? `## ${p.text}` : p.kind === 'h3' ? `### ${p.text}` : p.text);
     }
     flush();
-  }
-  const md = blocks.join('\n\n').replace(/\n\n- /g, '\n- ') + '\n';
-  if (!md.trim()) throw new Error('Tidak ada teks yang bisa diekstrak. PDF ini mungkin hasil scan (butuh OCR).');
+  });
   return {
-    files: [{ name: `${baseName(file.name)}.md`, blob: new Blob([md], { type: 'text/markdown' }) }],
-    note: 'Hasil berbasis heuristik ukuran font. Tabel dan kolom ganda mungkin perlu dirapikan manual.'
+    files: [{ name: `${baseName(file.name)}.md`, blob: new Blob([blocks.join('\n\n') + '\n'], { type: 'text/markdown' }) }],
+    note: 'Judul, daftar, dan tabel dikenali dari ukuran font serta posisi teks. Kolom ganda dan tabel tanpa garis bisa perlu dirapikan.'
   };
 };
-

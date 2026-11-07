@@ -12,6 +12,7 @@ const convert = () => import('./impl/convert');
 const toPdf = () => import('./impl/toPdf');
 const fromPdf = () => import('./impl/fromPdf');
 const secure = () => import('./impl/secure');
+const extra = () => import('./impl/extra');
 
 const PAGES: FieldDef = {
   type: 'text', key: 'pages', label: 'Halaman', default: 'all', placeholder: 'all',
@@ -32,7 +33,11 @@ export const TOOLS: ToolDef[] = [
     fields: [
       { type: 'select', key: 'mode', label: 'Cara memisah', default: 'each', options: [
         { value: 'each', label: 'Setiap halaman jadi satu file' },
+        { value: 'chunk', label: 'Setiap N halaman' },
+        { value: 'size', label: 'Berdasarkan ukuran file (perkiraan)' },
         { value: 'ranges', label: 'Berdasarkan rentang' }] },
+      { type: 'number', key: 'n', label: 'N halaman per file (mode "Setiap N halaman")', default: 5, min: 1, max: 999 },
+      { type: 'number', key: 'mb', label: 'Ukuran maksimal per file, MB (mode ukuran)', default: 5, min: 0.5, max: 200, step: 0.5 },
       { type: 'text', key: 'ranges', label: 'Rentang (jika memilih rentang)', placeholder: '1-3,4-6',
         hint: 'Tiap tanda koma menjadi satu file hasil.' }
     ]
@@ -69,11 +74,16 @@ export const TOOLS: ToolDef[] = [
   {
     id: 'compress', category: 'optimize', title: 'Kompres PDF', icon: '🗜️',
     desc: 'Perkecil ukuran file untuk dikirim atau diunggah.', keywords: ['kompres', 'compress', 'perkecil', 'kecil'],
-    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Kompres', run: lazy(convert, 'compress'),
-    fields: [{ type: 'select', key: 'level', label: 'Tingkat kompresi', default: 'recommended', options: [
-      { value: 'extreme', label: 'Maksimal (file terkecil, kualitas lebih rendah)' },
-      { value: 'recommended', label: 'Disarankan (seimbang)' },
-      { value: 'light', label: 'Ringan (kualitas tinggi)' }] }]
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Kompres', run: lazy(convert, 'compress'),
+    fields: [
+      { type: 'select', key: 'level', label: 'Tingkat kompresi', default: 'recommended', options: [
+        { value: 'extreme', label: 'Maksimal (file terkecil, kualitas gambar lebih rendah)' },
+        { value: 'recommended', label: 'Disarankan (seimbang)' },
+        { value: 'light', label: 'Ringan (kualitas gambar tinggi)' }] },
+      { type: 'select', key: 'mode', label: 'Cara kompresi', default: 'smart', options: [
+        { value: 'smart', label: 'Cerdas: perkecil gambar, teks tetap bisa dipilih' },
+        { value: 'raster', label: 'Ubah semua halaman jadi gambar (paling kecil, teks hilang)' }] }
+    ]
   },
   {
     id: 'repair', category: 'optimize', title: 'Perbaiki PDF', icon: '🩹',
@@ -134,10 +144,11 @@ export const TOOLS: ToolDef[] = [
 
   /* ===== Dari PDF ===== */
   {
-    id: 'pdf-to-jpg', category: 'from-pdf', title: 'PDF ke JPG', icon: '🏞️',
-    desc: 'Ubah setiap halaman PDF menjadi gambar.', keywords: ['jpg', 'gambar', 'image', 'png'],
+    id: 'pdf-to-jpg', category: 'from-pdf', title: 'PDF ke Gambar', icon: '🏞️',
+    desc: 'Ubah setiap halaman PDF menjadi JPG, PNG, atau WebP.', keywords: ['jpg', 'gambar', 'image', 'png'],
     accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Ubah ke JPG', run: lazy(convert, 'pdfToJpg'),
-    fields: [{ type: 'select', key: 'scale', label: 'Kualitas gambar', default: '2', options: [
+    fields: [{ type: 'select', key: 'format', label: 'Format', default: 'jpg', options: [{ value: 'jpg', label: 'JPG (kecil, foto)' }, { value: 'png', label: 'PNG (tajam, teks/grafik)' }, { value: 'webp', label: 'WebP (paling efisien)' }] },
+      { type: 'select', key: 'scale', label: 'Kualitas gambar', default: '2', options: [
       { value: '1.5', label: 'Standar (~108 dpi)' }, { value: '2', label: 'Tinggi (~144 dpi)' }, { value: '3', label: 'Sangat tinggi (~216 dpi)' }] }]
   },
   {
@@ -180,8 +191,8 @@ export const TOOLS: ToolDef[] = [
     ]
   },
   {
-    id: 'page-numbers', category: 'edit', title: 'Nomor halaman', icon: '🔢',
-    desc: 'Tambahkan nomor di setiap halaman.', keywords: ['nomor', 'page number', 'halaman'],
+    id: 'page-numbers', category: 'edit', title: 'Nomor halaman & header', icon: '🔢',
+    desc: 'Tambahkan nomor halaman, header, dan footer.', keywords: ['nomor', 'page number', 'halaman'],
     accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Tambahkan nomor', run: lazy(stamp, 'pageNumbers'),
     fields: [
       { type: 'select', key: 'position', label: 'Posisi', default: 'bottom-center', options: [
@@ -191,6 +202,9 @@ export const TOOLS: ToolDef[] = [
         { value: '{n}', label: '1, 2, 3' }, { value: 'Halaman {n} dari {total}', label: 'Halaman 1 dari 10' }, { value: '{n} / {total}', label: '1 / 10' }] },
       { type: 'number', key: 'start', label: 'Mulai dari nomor', default: 1, min: 0, max: 9999 },
       { type: 'number', key: 'size', label: 'Ukuran huruf', default: 11, min: 6, max: 36 },
+      { type: 'text', key: 'header', label: 'Teks header (opsional)', placeholder: 'Laporan Bulanan · {file}', hint: 'Token: {n} nomor, {total} jumlah halaman, {date} tanggal, {file} nama file.' },
+      { type: 'text', key: 'footer', label: 'Teks footer (opsional)', placeholder: 'Rahasia · {date}' },
+      { type: 'select', key: 'hfalign', label: 'Rata header/footer', default: 'center', options: [{ value: 'left', label: 'Kiri' }, { value: 'center', label: 'Tengah' }, { value: 'right', label: 'Kanan' }] },
       PAGES
     ]
   },
@@ -222,8 +236,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     id: 'edit-pdf', category: 'edit', title: 'Edit PDF', icon: '✏️',
-    desc: 'Tambahkan teks, kotak, sorotan, gambar, dan coretan.', keywords: ['anotasi', 'teks', 'tulis', 'edit', 'sorot'],
-    accept: 'pdf', multiple: false, status: 'beta', custom: () => import('../components/EditPdf')
+    desc: 'Edit teks yang ada, tambah teks, bentuk, panah, sorotan, dan gambar.', keywords: ['anotasi', 'teks', 'tulis', 'edit', 'sorot', 'panah', 'ganti teks'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/EditPdf')
   },
   {
     id: 'form', category: 'edit', title: 'Formulir PDF', icon: '📋',
@@ -252,17 +266,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     id: 'sign', category: 'security', title: 'Tanda tangani PDF', icon: '🖋️',
-    desc: 'Bubuhkan tanda tangan gambar ke dokumen.', keywords: ['tanda tangan', 'sign', 'ttd', 'signature'],
-    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Tanda tangani', run: lazy(stamp, 'sign'),
-    fields: [
-      { type: 'signature', key: 'signature', label: 'Gambar tanda tangan Anda' },
-      { type: 'select', key: 'target', label: 'Halaman', default: 'last', options: [
-        { value: 'last', label: 'Halaman terakhir' }, { value: 'first', label: 'Halaman pertama' }, { value: 'all', label: 'Semua halaman' }] },
-      { type: 'select', key: 'position', label: 'Posisi', default: 'bottom-right', options: [
-        { value: 'bottom-right', label: 'Bawah kanan' }, { value: 'bottom-left', label: 'Bawah kiri' }, { value: 'bottom-center', label: 'Bawah tengah' },
-        { value: 'middle-center', label: 'Tengah' }, { value: 'top-right', label: 'Atas kanan' }, { value: 'top-left', label: 'Atas kiri' }] },
-      { type: 'number', key: 'width', label: 'Lebar tanda tangan (pt)', default: 150, min: 40, max: 400 }
-    ]
+    desc: 'Gambar, ketik, atau unggah tanda tangan lalu tempatkan di halaman mana pun.', keywords: ['tanda tangan', 'sign', 'ttd', 'signature', 'paraf'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/SignPdf')
   },
   {
     id: 'redact', category: 'security', title: 'Samarkan PDF', icon: '⬛',
@@ -278,8 +283,8 @@ export const TOOLS: ToolDef[] = [
   /* ===== AI ===== */
   {
     id: 'summarize', category: 'ai', title: 'Perangkum AI', icon: '✨',
-    desc: 'Ringkas isi PDF di perangkat Anda.', keywords: ['ringkas', 'summary', 'rangkum', 'ai'],
-    accept: 'pdf', multiple: false, status: 'beta', custom: () => import('../components/AiSummarize')
+    desc: 'Ringkasan, poin per bagian, dan kata kunci, di perangkat Anda.', keywords: ['ringkas', 'summary', 'rangkum', 'ai', 'kata kunci'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/AiSummarize')
   },
   {
     id: 'translate', category: 'ai', title: 'Terjemahkan PDF', icon: '🌍',
@@ -289,8 +294,57 @@ export const TOOLS: ToolDef[] = [
   {
     id: 'pdf-to-markdown', category: 'ai', title: 'PDF ke Markdown', icon: '🧾',
     desc: 'Ekstrak teks PDF menjadi Markdown berstruktur.', keywords: ['markdown', 'md', 'teks', 'ekstrak'],
-    accept: 'pdf', multiple: false, status: 'beta', actionLabel: 'Ubah ke Markdown', run: lazy(convert, 'pdfToMarkdown')
-  }
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Ubah ke Markdown', run: lazy(convert, 'pdfToMarkdown'),
+    fields: [{ type: 'select', key: 'marker', label: 'Penanda halaman', default: 'no', options: [{ value: 'no', label: 'Tanpa penanda' }, { value: 'yes', label: 'Sisipkan komentar tiap halaman' }] }]
+  },
+  {
+    id: 'blank-pages', category: 'organize', title: 'Hapus halaman kosong', icon: '📄',
+    desc: 'Deteksi otomatis dan buang halaman kosong hasil scan.', keywords: ['kosong', 'blank', 'bersihkan', 'scan'],
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Hapus halaman kosong', run: lazy(extra, 'blankPages'),
+    fields: [{ type: 'select', key: 'sensitivity', label: 'Sensitivitas', default: 'normal', options: [{ value: 'strict', label: 'Ketat (hanya halaman benar-benar putih)' }, { value: 'normal', label: 'Normal' }, { value: 'loose', label: 'Longgar (abaikan bercak scan)' }] }]
+  },
+  {
+    id: 'resize', category: 'organize', title: 'Ubah ukuran halaman', icon: '↔️',
+    desc: 'Samakan ukuran halaman ke A4, A3, A5, Letter, atau Legal.', keywords: ['ukuran', 'resize', 'a4', 'skala', 'kertas'],
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Ubah ukuran', run: lazy(extra, 'resizePages'),
+    fields: [
+      { type: 'select', key: 'size', label: 'Ukuran kertas', default: 'a4', options: [{ value: 'a4', label: 'A4' }, { value: 'a3', label: 'A3' }, { value: 'a5', label: 'A5' }, { value: 'letter', label: 'Letter' }, { value: 'legal', label: 'Legal' }] },
+      { type: 'select', key: 'orient', label: 'Orientasi', default: 'auto', options: [{ value: 'auto', label: 'Ikuti tiap halaman' }, { value: 'portrait', label: 'Tegak semua' }, { value: 'landscape', label: 'Mendatar semua' }] },
+      { type: 'number', key: 'margin', label: 'Margin (pt)', default: 0, min: 0, max: 100 }
+    ]
+  },
+  {
+    id: 'nup', category: 'edit', title: 'Cetak ringkas & booklet', icon: '🗒️',
+    desc: 'Muat 2, 4, 6, atau 9 halaman per lembar, atau susun booklet.', keywords: ['nup', 'cetak', 'hemat kertas', 'booklet', 'lembar'],
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Susun lembar', run: lazy(extra, 'nup'),
+    fields: [
+      { type: 'select', key: 'layout', label: 'Tata letak', default: '4', options: [{ value: '2', label: '2 halaman per lembar' }, { value: '4', label: '4 halaman per lembar' }, { value: '6', label: '6 halaman per lembar' }, { value: '9', label: '9 halaman per lembar' }, { value: 'booklet', label: 'Booklet (urutan lipat, cetak dua sisi)' }] },
+      { type: 'select', key: 'size', label: 'Ukuran kertas', default: 'a4', options: [{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }, { value: 'a3', label: 'A3' }] },
+      { type: 'select', key: 'border', label: 'Garis tepi halaman', default: 'yes', options: [{ value: 'yes', label: 'Ya' }, { value: 'no', label: 'Tidak' }] }
+    ]
+  },
+  {
+    id: 'extract-images', category: 'from-pdf', title: 'Ekstrak gambar', icon: '🖼️',
+    desc: 'Ambil semua gambar asli di dalam PDF, tanpa kehilangan kualitas.', keywords: ['gambar', 'foto', 'ekstrak', 'images', 'logo'],
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Ekstrak gambar', run: lazy(extra, 'extractImages'),
+    fields: [{ type: 'number', key: 'min', label: 'Abaikan gambar lebih kecil dari (piksel)', default: 64, min: 0, max: 2000, hint: 'Menyaring ikon dan garis dekoratif.' }]
+  },
+  {
+    id: 'pdf-to-text', category: 'from-pdf', title: 'PDF ke Teks', icon: '🔤',
+    desc: 'Ekstrak seluruh teks PDF menjadi berkas .txt.', keywords: ['txt', 'teks', 'salin', 'text'],
+    accept: 'pdf', multiple: false, status: 'ready', actionLabel: 'Ekstrak teks', run: lazy(extra, 'pdfToText'),
+    fields: [{ type: 'select', key: 'marker', label: 'Penanda halaman', default: 'no', options: [{ value: 'no', label: 'Tanpa penanda' }, { value: 'yes', label: 'Sisipkan "Halaman N"' }] }]
+  },
+  {
+    id: 'metadata', category: 'edit', title: 'Info & metadata', icon: '🏷️',
+    desc: 'Lihat detail PDF, ubah judul/penulis, atau hapus jejak metadata.', keywords: ['metadata', 'info', 'properti', 'penulis', 'judul', 'privasi'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/MetaEditor')
+  },
+  {
+    id: 'ask', category: 'ai', title: 'Tanya Dokumen', icon: '💬',
+    desc: 'Ajukan pertanyaan, dapatkan jawaban dan halaman rujukannya.', keywords: ['tanya', 'jawab', 'qa', 'cari', 'pertanyaan', 'chat'],
+    accept: 'pdf', multiple: false, status: 'ready', custom: () => import('../components/AiAsk')
+  },
 ];
 
 export const getTool = (id: string) => TOOLS.find((t) => t.id === id);

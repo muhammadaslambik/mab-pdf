@@ -27,30 +27,7 @@ export function chunkText(text: string, size = 3500): string[] {
   return out;
 }
 
-const STOP = new Set(('yang dan di ke dari untuk dengan pada adalah ini itu atau dalam juga akan oleh sebagai tidak ada dapat telah karena saya kami kita mereka anda lebih sudah bisa para serta antara setiap tersebut harus hanya lain jika saat agar bahwa the of and to in a is that for it as with was on be by this are or from at an have not but we our you your they their which has will can more also all').split(' '));
-
-export function guessLang(text: string): 'id' | 'en' | 'other' {
-  const w = text.toLowerCase().match(/[a-z]+/g) ?? [];
-  if (w.length < 20) return 'other';
-  const id = w.filter((x) => ['yang', 'dan', 'di', 'untuk', 'dengan', 'adalah', 'pada', 'dari', 'ini', 'itu', 'tidak', 'akan'].includes(x)).length;
-  const en = w.filter((x) => ['the', 'and', 'of', 'to', 'is', 'in', 'that', 'for', 'with', 'this', 'are', 'was'].includes(x)).length;
-  if (id + en < w.length * 0.04) return 'other';
-  return id >= en ? 'id' : 'en';
-}
-
-export function extractiveSummary(text: string, count = 6): string[] {
-  const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+(?=[A-Z0-9"'“(])/).map((s) => s.trim()).filter((s) => s.length > 30 && s.length < 600);
-  if (sentences.length <= count) return sentences;
-  const freq = new Map<string, number>();
-  const toks = (s: string) => (s.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((w) => !STOP.has(w));
-  for (const s of sentences) for (const w of toks(s)) freq.set(w, (freq.get(w) ?? 0) + 1);
-  const scored = sentences.map((s, i) => {
-    const t = toks(s);
-    const score = t.reduce((a, w) => a + (freq.get(w) ?? 0), 0) / Math.pow(Math.max(t.length, 6), 0.7);
-    return { s, i, score: score * (i < sentences.length * 0.15 ? 1.15 : 1) };
-  });
-  return scored.sort((a, b) => b.score - a.score).slice(0, count).sort((a, b) => a.i - b.i).map((x) => x.s);
-}
+export { detectLang as guessLang, summarize as extractiveSummary } from './nlp';
 
 /* ---------- Chrome built-in AI ---------- */
 export async function chromeSummarize(text: string, length: 'short' | 'medium' | 'long', onProgress: Progress): Promise<string> {
@@ -80,22 +57,38 @@ export async function chromeDetect(text: string): Promise<string | null> {
 
 /* ---------- WebLLM (WebGPU) ---------- */
 const WEBLLM_URL = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2/+esm';
-const PREFERRED = ['Qwen2.5-1.5B-Instruct-q4f16_1-MLC', 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Qwen2.5-3B-Instruct-q4f16_1-MLC'];
-let engineP: Promise<any> | null = null;
+export type Tier = 'light' | 'balanced' | 'smart';
+export const TIERS: Record<Tier, { label: string; ids: string[] }> = {
+  light: { label: 'Ringan (±0,4 GB, cepat, cocok untuk HP/laptop biasa)', ids: ['Qwen2.5-0.5B-Instruct-q4f16_1-MLC', 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC'] },
+  balanced: { label: 'Seimbang (±1 GB, disarankan)', ids: ['Qwen2.5-1.5B-Instruct-q4f16_1-MLC', 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC'] },
+  smart: { label: 'Pintar (±2 GB, butuh GPU yang memadai)', ids: ['Qwen2.5-3B-Instruct-q4f16_1-MLC', 'Llama-3.2-3B-Instruct-q4f16_1-MLC', 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC'] }
+};
+export const defaultTier = (): Tier => (((navigator as any).deviceMemory ?? 8) >= 8 ? 'balanced' : 'light');
+const engines = new Map<Tier, Promise<any>>();
 
-export function loadWebLLM(onProgress: Progress): Promise<any> {
-  if (!hasWebGPU()) return Promise.reject(new Error('Browser ini belum mendukung WebGPU. Coba Chrome atau Edge terbaru di laptop/desktop.'));
-  return (engineP ??= (async () => {
-    const lib: any = await import(/* @vite-ignore */ WEBLLM_URL);
-    const list: string[] = lib.prebuiltAppConfig.model_list.map((m: any) => m.model_id);
-    const id = PREFERRED.find((p) => list.includes(p)) ?? list.find((m) => /(1\.5B|1B).*q4f16/i.test(m)) ?? list[0];
-    return lib.CreateMLCEngine(id, { initProgressCallback: (r: any) => onProgress(r.progress ?? 0, r.text ?? 'Memuat model') });
-  })().catch((e) => { engineP = null; throw e; }));
+export async function loadWebLLM(tier: Tier, onProgress: Progress): Promise<any> {
+  if (!hasWebGPU()) throw new Error('Browser ini belum mendukung WebGPU. Coba Chrome atau Edge terbaru di laptop/desktop.');
+  let p = engines.get(tier);
+  if (!p) {
+    // hemat memori: lepaskan model tingkat lain
+    for (const [t, e] of engines) if (t !== tier) { e.then((x) => x.unload?.()).catch(() => {}); engines.delete(t); }
+    p = (async () => {
+      const lib: any = await import(/* @vite-ignore */ WEBLLM_URL);
+      const list: string[] = lib.prebuiltAppConfig.model_list.map((m: any) => m.model_id);
+      const id = TIERS[tier].ids.find((x) => list.includes(x)) ?? list.find((m) => /(1\.5B|1B).*q4f16/i.test(m)) ?? list[0];
+      return lib.CreateMLCEngine(id, { initProgressCallback: (r: any) => onProgress(r.progress ?? 0, r.text ?? 'Memuat model') });
+    })().catch((e) => { engines.delete(tier); throw e; });
+    engines.set(tier, p);
+  }
+  return p;
 }
 
-export async function llm(engine: any, system: string, user: string, maxTokens = 400): Promise<string> {
-  const r = await engine.chat.completions.create({ messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: 0.2, max_tokens: maxTokens });
-  return String(r.choices?.[0]?.message?.content ?? '').trim();
+export async function llm(engine: any, system: string, user: string, maxTokens = 400, onToken?: (acc: string) => void): Promise<string> {
+  const req = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: 0.2, max_tokens: maxTokens };
+  if (!onToken) { const r = await engine.chat.completions.create(req); return String(r.choices?.[0]?.message?.content ?? '').trim(); }
+  let acc = '';
+  for await (const chunk of await engine.chat.completions.create({ ...req, stream: true })) { acc += chunk.choices?.[0]?.delta?.content ?? ''; onToken(acc); }
+  return acc.trim();
 }
 
 export const LANGS: Record<string, string> = {

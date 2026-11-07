@@ -21,10 +21,12 @@ export const merge: RunFn = async (files, _o, ctx) => {
 export const split: RunFn = async ([file], o, ctx) => {
   const src = await loadPdf(file);
   const total = src.getPageCount();
-  const groups =
-    o.mode === 'ranges'
-      ? parseGroups(String(o.ranges ?? ''), total)
-      : Array.from({ length: total }, (_, i) => [i]);
+  const chunk = (n: number) => Array.from({ length: Math.ceil(total / n) }, (_, g) => Array.from({ length: Math.min(n, total - g * n) }, (_, k) => g * n + k));
+  let groups: number[][];
+  if (o.mode === 'ranges') groups = parseGroups(String(o.ranges ?? ''), total);
+  else if (o.mode === 'chunk') groups = chunk(Math.max(1, Math.floor(Number(o.n) || 1)));
+  else if (o.mode === 'size') groups = chunk(Math.max(1, Math.floor(((Number(o.mb) || 5) * 1048576) / Math.max(1, file.size / total))));
+  else groups = Array.from({ length: total }, (_, i) => [i]);
   const outs: { name: string; data: Uint8Array }[] = [];
   for (let g = 0; g < groups.length; g++) {
     ctx.check();

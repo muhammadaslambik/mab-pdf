@@ -1,10 +1,11 @@
-import { lazy, Suspense, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CustomProps, FieldDef, Opts, ToolDef, ToolResult } from '../tools/types';
 import { CATEGORIES } from '../tools/types';
 import { defaultOpts } from '../tools/registry';
 import { downloadBlob, formatBytes } from '../lib/util';
 import SignaturePad from './SignaturePad';
 import { ToolIcon, UiIcon } from './icons';
+import { takePending } from '../lib/handoff';
 
 const MAX_BYTES = 300 * 1024 * 1024;
 
@@ -76,6 +77,17 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
     setFiles((prev) => (tool.multiple ? [...prev, ...valid] : [valid[0]]));
   };
 
+  // file kiriman dari pemilih tindakan di beranda, atau yang dilepas/ditempel di halaman ini
+  const addRef = useRef(addFiles);
+  addRef.current = addFiles;
+  useEffect(() => {
+    const p = takePending();
+    if (p.length) addRef.current(p);
+    const on = (e: Event) => addRef.current((e as CustomEvent<File[]>).detail);
+    window.addEventListener('mab:tool-files', on);
+    return () => window.removeEventListener('mab:tool-files', on);
+  }, []);
+
   const swap = (i: number, d: number) =>
     setFiles((a) => {
       const j = i + d;
@@ -141,9 +153,9 @@ export default function ToolPage({ tool }: { tool: ToolDef }) {
           {!result && (
             <label
               className={`drop ${drag ? 'over' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDrag(true); }}
               onDragLeave={() => setDrag(false)}
-              onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
+              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDrag(false); addFiles(e.dataTransfer.files); }}
             >
               <input
                 type="file" hidden multiple={tool.multiple}

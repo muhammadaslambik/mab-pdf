@@ -3,7 +3,7 @@ import { TOOLS } from '../tools/registry';
 import { CATEGORIES, type Category } from '../tools/types';
 import { ToolIcon, UiIcon } from './icons';
 
-const POPULAR: [string, string][] = [['merge', 'Gabungkan'], ['compress', 'Kompres'], ['pdf-to-jpg', 'PDF ke JPG'], ['split', 'Pisahkan'], ['sign', 'Tanda tangan'], ['word-to-pdf', 'Word ke PDF']];
+const POPULAR: [string, string][] = [['merge', 'Gabungkan'], ['compress', 'Kompres'], ['pdf-to-jpg', 'PDF ke gambar'], ['split', 'Pisahkan'], ['sign', 'Tanda tangan'], ['word-to-pdf', 'Word ke PDF']];
 
 export default function Home() {
   const [q, setQ] = useState('');
@@ -104,6 +104,13 @@ export default function Home() {
               <UiIcon name="search" size={20} />
               <input ref={heroSearch} type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari alat, mis. “gabung”" aria-label="Cari alat" />
               <kbd aria-hidden>/</kbd>
+            </div>
+            <div className="universal">
+              <label className="btn-ghost">
+                <UiIcon name="upload" size={17} /> Pilih file
+                <input type="file" hidden multiple onChange={(e) => { const f = Array.from(e.target.files ?? []); e.target.value = ''; if (f.length) window.dispatchEvent(new CustomEvent('mab:files', { detail: f })); }} />
+              </label>
+              <span>atau seret file ke mana saja, atau tempel dengan Ctrl+V. Kami tawarkan alat yang cocok.</span>
             </div>
             <div className="popular" aria-label="Alat populer">
               <span>Populer</span>

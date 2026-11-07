@@ -40,6 +40,13 @@ const ICONS: Record<string, ReactNode> = {
   compare: (<><rect x="3" y="4" width="8" height="16" rx="1.8" /><rect x="13" y="4" width="8" height="16" rx="1.8" /><path d="M6 9h2M16 9h2M16 13h2" /></>),
   summarize: <path d="m12 3 1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />,
   translate: <path d="M4 5h9M8.5 3v2M6 5c.5 4 3 7 6.5 8.5M12 5c-.5 3-3 7-7.5 9.5M13 20l4-9 4 9M14.5 17h5" />,
+  metadata: <path d="M3 12V4h8l10 10-8 8L3 12zM7.5 8.5h.01" />,
+  'pdf-to-text': <path d="M5 5h14M12 5v14M8.5 19h7" />,
+  'blank-pages': <path strokeDasharray="2.2 2.4" d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />,
+  resize: <path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6" />,
+  nup: (<><rect x="3" y="4" width="8" height="7" rx="1.5" /><rect x="13" y="4" width="8" height="7" rx="1.5" /><rect x="3" y="13" width="8" height="7" rx="1.5" /><rect x="13" y="13" width="8" height="7" rx="1.5" /></>),
+  'extract-images': (<><rect x="3" y="4" width="14" height="12" rx="2" /><circle cx="8" cy="8.5" r="1.3" /><path d="m3.5 14 3.8-3.8 3 3 2-2 3.2 3.2M19 14v6m0 0-2.5-2.5M19 20l2.5-2.5" /></>),
+  ask: <path d="M4 5h16v11H9l-5 4V5zM10 9.5a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2M12 14.4v.01" />,
   'pdf-to-markdown': (<><rect x="2.5" y="5" width="19" height="14" rx="2.5" /><path d="M6 15V9l3 3 3-3v6M16 9v6m-2-2 2 2 2-2" /></>)
 };
 
@@ -58,7 +65,11 @@ const UI: Record<string, ReactNode> = {
   bolt: <path d="M13 3 5 14h6l-1 7 8-11h-6l1-7z" />,
   gift: <path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13M12 7c-2.5 0-4-1-4-2.5S9 2 10.5 3 12 7 12 7zm0 0c2.5 0 4-1 4-2.5S15 2 13.5 3 12 7 12 7z" />,
   download: <path d="M12 4v12m0 0-4.5-4.5M12 16l4.5-4.5M4 19h16" />,
-  check: <path d="m5 12.5 4.5 4.5L19 7.5" />
+  check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></>,
+  moon: <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />,
+  leaf: <path d="M5 19c0-8 5-14 15-14 0 10-6 15-14 15M5 19c2-5 5-8 9-10" />,
+  auto: <><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5v17M12 3.5a8.5 8.5 0 0 1 0 17" /></>
 };
 export function UiIcon({ name, size = 20 }: { name: keyof typeof UI; size?: number }) {
   return <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" {...S}>{UI[name]}</svg>;

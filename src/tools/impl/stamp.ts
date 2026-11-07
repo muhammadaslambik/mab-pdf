@@ -24,6 +24,16 @@ export const pageNumbers: RunFn = async ([file], o) => {
     const x = h === 'left' ? margin : h === 'right' ? width - margin - w : (width - w) / 2;
     const y = v === 'top' ? height - margin - size : margin;
     pages[i].drawText(text, { x, y, size, font, color: rgb(0.2, 0.2, 0.2) });
+    // teks header/footer opsional dengan token {n} {total} {date} {file}
+    const fill = (t: string) => t.replace('{n}', String(start + i)).replace('{total}', String(pages.length)).replace('{date}', new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })).replace('{file}', baseName(file.name));
+    const hf = (t: string, top: boolean) => {
+      if (!t.trim()) return;
+      const txt = fill(t), hs = Math.max(7, size - 2), tw = font.widthOfTextAtSize(txt, hs);
+      const al = String(o.hfalign || 'center');
+      const hx = al === 'left' ? margin : al === 'right' ? width - margin - tw : (width - tw) / 2;
+      pages[i].drawText(txt, { x: hx, y: top ? height - margin - hs : margin + (v === 'bottom' && ['center', 'left', 'right'].includes(h) ? size + 8 : 0), size: hs, font, color: rgb(0.35, 0.35, 0.35) });
+    };
+    hf(String(o.header ?? ''), true); hf(String(o.footer ?? ''), false);
   }
   return pdfResult(await pdf.save(), `${baseName(file.name)}-nomor.pdf`);
 };

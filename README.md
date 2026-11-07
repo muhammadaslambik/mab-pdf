@@ -17,31 +17,11 @@ npm run typecheck  # pemeriksaan tipe TypeScript
 
 Butuh Node.js 20 atau lebih baru.
 
-## 33 alat
+## 40 alat
 
-Tingkat: **Stabil** = hasil andal. **Beta** = berfungsi, tetapi ada keterbatasan (lihat kolom catatan).
+Daftar lengkap, tingkat kematangan (Stabil/Beta), dan apa yang belum dikerjakan ada di **[HANDOFF.md](HANDOFF.md)**.
 
-| Kategori | Alat | Tingkat | Catatan |
-|---|---|---|---|
-| Atur PDF | Gabungkan, Pisahkan, Hapus halaman, Ekstrak halaman, Atur PDF | Stabil | |
-| | Pindai ke PDF | Beta | Kamera HP lewat input file |
-| Optimalkan | Kompres PDF | Beta | Halaman dijadikan gambar (teks tidak bisa diseleksi) |
-| | Perbaiki PDF | Beta | Tiga tahap: qpdf, pdf-lib, lalu pemulihan pdf.js (mode gambar) |
-| | OCR PDF | Beta | Tesseract.js; data bahasa diunduh dari CDN saat pertama dipakai |
-| Ke PDF | JPG/PNG/WebP ke PDF | Stabil | |
-| | Word, Excel/CSV, HTML, PowerPoint ke PDF | Beta | Mesin ringan buatan sendiri: font Helvetica, huruf Latin saja, tata letak rumit tidak dipertahankan |
-| Dari PDF | PDF ke JPG | Stabil | |
-| | PDF ke Word, Excel, PowerPoint | Beta | Rekonstruksi dari posisi teks; tabel sederhana terdeteksi |
-| | PDF ke PDF/A | Beta | Versi gambar + XMP + sRGB OutputIntent. Belum divalidasi dengan veraPDF |
-| Edit | Putar, Nomor halaman, Watermark, Potong, Formulir PDF | Stabil | Huruf Latin untuk teks tambahan |
-| | Edit PDF | Beta | Anotasi: teks, kotak, sorot, gambar, pena. Bukan mengedit teks asli |
-| Keamanan | Proteksi PDF | Stabil | AES-128, diverifikasi dengan qpdf/pikepdf |
-| | Buka PDF terkunci | Beta | Utuh bila engine qpdf terpasang; jika tidak, mode cadangan berupa gambar |
-| | Samarkan PDF | Stabil | Redaksi sejati: halaman dirender ulang, teks di bawah kotak hitam hilang |
-| | Tanda tangani PDF | Beta | Tanda tangan gambar (bukan tanda tangan digital sertifikat) |
-| | Bandingkan PDF | Beta | Mode teks (diff Myers) dan visual (selisih piksel) |
-| AI | PDF ke Markdown | Beta | Heuristik ukuran font |
-| | Perangkum AI, Terjemahkan PDF | Beta | Ekstraktif (semua bahasa), AI bawaan Chrome, atau model lokal WebGPU (opt-in, unduhan ±1 GB) |
+Ringkas: Atur (gabung, pisah, hapus, ekstrak, atur visual, halaman kosong, ukuran halaman, pindai), Optimalkan (kompres cerdas, perbaiki, OCR), ke PDF (gambar, Word, Excel, PowerPoint, HTML), dari PDF (gambar, teks, Markdown, Word, Excel, PowerPoint, PDF/A, ekstrak gambar), Edit (putar, nomor/header, watermark, potong, formulir, edit PDF, N-up/booklet, metadata), Keamanan (proteksi, buka kunci, tanda tangan, samarkan, bandingkan), AI (perangkum, penerjemah, tanya dokumen).
 
 ## Catatan teknis penting
 

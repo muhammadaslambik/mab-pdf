@@ -73,6 +73,12 @@ export default function Organizer({ files, onDone, onError }: CustomProps) {
   return (
     <div>
       <p className="hint">Geser urutan dengan tombol panah, putar, atau hapus halaman. Tersisa {items.length} halaman.</p>
+      <div className="ann-bar">
+        <button onClick={() => setItems((a) => [...a].reverse())}>Balik urutan</button>
+        <button onClick={() => setItems((a) => a.map((x) => ({ ...x, rot: (x.rot + 90) % 360 })))}>Putar semua</button>
+        <button onClick={() => setItems((a) => a.filter((_, i) => i % 2 === 0))}>Sisakan ganjil</button>
+        <button onClick={() => setItems((a) => a.filter((_, i) => i % 2 === 1))}>Sisakan genap</button>
+      </div>
       <div className="thumbs">
         {items.map((it, i) => (
           <div className="thumb" key={it.id}>
