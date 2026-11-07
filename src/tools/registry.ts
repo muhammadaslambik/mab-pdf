@@ -61,13 +61,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     id: 'scan', category: 'organize', title: 'Pindai ke PDF', icon: '📷',
-    desc: 'Foto dokumen dengan kamera, jadikan PDF.', keywords: ['pindai', 'scan', 'kamera', 'foto'],
-    accept: 'image', multiple: true, status: 'beta', capture: true, actionLabel: 'Buat PDF', run: lazy(convert, 'imagesToPdf'),
-    fields: [
-      { type: 'select', key: 'size', label: 'Ukuran halaman', default: 'a4', options: [
-        { value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }, { value: 'fit', label: 'Sesuai gambar' }] },
-      { type: 'number', key: 'margin', label: 'Margin (pt)', default: 12, min: 0, max: 100 }
-    ]
+    desc: 'Foto dokumen, luruskan otomatis, jadikan PDF.', keywords: ['pindai', 'scan', 'kamera', 'foto', 'dokumen'],
+    accept: 'image', multiple: true, minFiles: 0, status: 'beta', capture: true, custom: () => import('../components/ScanStudio')
   },
 
   /* ===== Optimalkan ===== */
