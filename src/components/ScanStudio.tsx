@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CustomProps } from '../tools/types';
-import { applyFilter, buildPdf, defaultCorners, detectCorners, rotate, toCanvas, warp, type Filter, type Pt } from '../lib/scan';
+import { buildPdf, defaultCorners, disposeScan, scan, toCanvas, toCanvasFrom, type Filter, type Pt } from '../lib/scan';
 import './scan.css';
 
-interface Page { id: number; src: HTMLCanvasElement; url: string; q: Pt[]; filter: Filter; rot: number }
-const FILTERS: [Filter, string][] = [['orig', 'Asli'], ['doc', 'Dokumen'], ['bw', 'Hitam-putih'], ['gray', 'Abu-abu']];
+interface Page { id: number; w: number; h: number; url: string; q: Pt[]; filter: Filter; rot: number; ink: number }
+const FILTERS: [Filter, string][] = [['auto', 'Cerdas'], ['orig', 'Asli'], ['doc', 'Dokumen'], ['bw', 'Hitam-putih'], ['gray', 'Abu-abu']];
 let uid = 1;
-
-const render = (p: Page, maxSide: number) => rotate(applyFilter(warp(p.src, p.q, maxSide), p.filter), p.rot);
 
 export default function ScanStudio({ files, onDone, onError }: CustomProps) {
   const [pages, setPages] = useState<Page[]>([]);
@@ -16,31 +14,46 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
   const [size, setSize] = useState('a4');
   const [margin, setMargin] = useState(12);
   const [busy, setBusy] = useState('');
+  const [note, setNote] = useState('');
+  const [working, setWorking] = useState(false);
   const seen = useRef(new Set<File>());
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const prev = useRef<HTMLCanvasElement>(null);
   const page = pages[sel];
+  const latest = useRef<Page | undefined>(page);
+  latest.current = page;
+  const all = useRef<Page[]>([]);
+  all.current = pages;
+  const loop = useRef({ busy: false, dirty: false });
 
-  const addCanvas = useCallback((src: HTMLCanvasElement) => {
-    const t = document.createElement('canvas'), s = Math.min(1, 900 / Math.max(src.width, src.height));
-    t.width = Math.round(src.width * s); t.height = Math.round(src.height * s);
+  const addCanvas = useCallback(async (src: HTMLCanvasElement) => {
+    const id = uid++, w = src.width, h = src.height, s = Math.min(1, 900 / Math.max(w, h));
+    const t = document.createElement('canvas');
+    t.width = Math.round(w * s); t.height = Math.round(h * s);
     t.getContext('2d')!.drawImage(src, 0, 0, t.width, t.height);
-    const p: Page = { id: uid++, src, url: t.toDataURL('image/jpeg', 0.8), q: detectCorners(src), filter: 'doc', rot: 0 };
-    setPages((a) => { setSel(a.length); return [...a, p]; });
+    const url = t.toDataURL('image/jpeg', 0.8);
+    t.width = 0;
+    const img = src.getContext('2d')!.getImageData(0, 0, w, h);
+    src.width = 0; src.height = 0; // lepas memori kanvas; piksel kini hidup di worker
+    await scan.init(id, img);
+    const q = await scan.detect(id).catch(() => defaultCorners());
+    setPages((a) => { setSel(a.length); return [...a, { id, w, h, url, q, filter: 'auto', rot: 0, ink: 0.76 }]; });
   }, []);
 
   const addFiles = useCallback(async (list: File[]) => {
+    setWorking(true);
     for (const f of list) {
       if (!f.type.startsWith('image/')) continue;
-      try { addCanvas(await toCanvas(f)); } catch (e: any) { onError(e?.message || 'Gambar tidak bisa dibaca.'); }
+      try { await addCanvas(await toCanvas(f)); } catch (e: any) { onError(e?.message || 'Gambar tidak bisa dibaca.'); }
     }
+    setWorking(false);
   }, [addCanvas, onError]);
 
   useEffect(() => { const n = files.filter((f) => !seen.current.has(f)); n.forEach((f) => seen.current.add(f)); if (n.length) addFiles(n); }, [files, addFiles]);
 
   const stopCam = () => { stream.current?.getTracks().forEach((t) => t.stop()); stream.current = null; setCam(false); };
-  useEffect(() => () => { stream.current?.getTracks().forEach((t) => t.stop()); }, []);
+  useEffect(() => () => { stream.current?.getTracks().forEach((t) => t.stop()); all.current.forEach((p) => scan.free(p.id)); disposeScan(); }, []);
   const startCam = async () => {
     if (!navigator.mediaDevices?.getUserMedia) return onError('Kamera tidak tersedia di browser ini. Gunakan tombol "Tambah foto".');
     try {
@@ -49,18 +62,32 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
       requestAnimationFrame(() => { if (video.current) { video.current.srcObject = stream.current; video.current.play().catch(() => {}); } });
     } catch { onError('Izin kamera ditolak atau kamera tidak ditemukan. Gunakan tombol "Tambah foto".'); }
   };
-  const snap = async () => { if (video.current?.videoWidth) addCanvas(await toCanvas(video.current)); };
+  const snap = async () => { if (video.current?.videoWidth) { setWorking(true); await addCanvas(await toCanvas(video.current)); setWorking(false); } };
 
   const patch = (fn: (p: Page) => Page) => setPages((a) => a.map((p, i) => (i === sel ? fn(p) : p)));
 
-  // pratinjau hasil (resolusi rendah, ditunda agar seretan tetap lancar)
+  // Pratinjau: di worker, hanya satu permintaan berjalan, perubahan terbaru menang (seretan tetap lancar di HP lama)
   useEffect(() => {
-    if (!page || !prev.current) return;
-    const h = setTimeout(() => {
-      const r = render(page, 900), c = prev.current!;
-      c.width = r.width; c.height = r.height; c.getContext('2d')!.drawImage(r, 0, 0);
-    }, 90);
-    return () => clearTimeout(h);
+    if (!page) return;
+    const L = loop.current;
+    if (L.busy) { L.dirty = true; return; }
+    (async () => {
+      L.busy = true;
+      do {
+        L.dirty = false;
+        const p = latest.current; if (!p) break;
+        try {
+          const r = await scan.render(p.id, p.q, p.filter, p.ink, p.rot, 900, true);
+          const c = prev.current;
+          if (c && latest.current?.id === p.id) {
+            c.width = r.w; c.height = r.h;
+            c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(r.buf), r.w, r.h), 0, 0);
+            setNote(p.filter === 'auto' ? r.report : '');
+          }
+        } catch { /* halaman dihapus saat diproses */ }
+      } while (L.dirty);
+      L.busy = false;
+    })();
   }, [page]);
 
   const drag = useRef<{ i: number } | null>(null);
@@ -71,17 +98,19 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
     patch((p) => ({ ...p, q: p.q.map((c, k) => (k === i ? { x, y } : c)) }));
   };
   const swap = (d: number) => setPages((a) => { const j = sel + d; if (j < 0 || j >= a.length) return a; const b = [...a]; [b[sel], b[j]] = [b[j], b[sel]]; setSel(j); return b; });
-  const del = () => setPages((a) => { const b = a.filter((_, i) => i !== sel); setSel(Math.max(0, Math.min(sel, b.length - 1))); return b; });
+  const del = () => { const p = pages[sel]; if (p) scan.free(p.id); setPages((a) => { const b = a.filter((_, i) => i !== sel); setSel(Math.max(0, Math.min(sel, b.length - 1))); return b; }); };
+  const redetect = async () => { const p = page; if (!p) return; const q = await scan.detect(p.id).catch(() => defaultCorners()); setPages((a) => a.map((x) => (x.id === p.id ? { ...x, q } : x))); };
 
   const exportPdf = async () => {
     try {
       setBusy('Menyusun halaman 0/' + pages.length);
-      await new Promise((r) => setTimeout(r, 30));
-      const out: HTMLCanvasElement[] = [];
-      for (const p of pages) { out.push(render(p, 2000)); setBusy(`Menyusun halaman ${out.length}/${pages.length}`); await new Promise((r) => setTimeout(r)); }
-      const blob = await buildPdf(out, size, margin, (i) => setBusy(`Menulis PDF ${i}/${out.length}`));
-      out.forEach((c) => { c.width = 0; c.height = 0; });
-      onDone({ files: [{ name: 'pindaian.pdf', blob }], note: `${pages.length} halaman` });
+      const list = [...pages];
+      const blob = await buildPdf(list.length, async (i) => {
+        setBusy(`Menyusun halaman ${i + 1}/${list.length}`);
+        const p = list[i];
+        return toCanvasFrom(await scan.render(p.id, p.q, p.filter, p.ink, p.rot, 2000, false));
+      }, size, margin, (i) => setBusy(`Menulis PDF ${i}/${list.length}`));
+      onDone({ files: [{ name: 'pindaian.pdf', blob }], note: `${list.length} halaman` });
     } catch (e: any) { onError(e?.message || 'Gagal membuat PDF.'); } finally { setBusy(''); }
   };
 
@@ -92,12 +121,13 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
         <label className="btn-quiet">Tambah foto
           <input type="file" accept="image/*" multiple hidden onChange={(e) => { addFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
         </label>
+        {working && <span className="hint">Memproses…</span>}
       </div>
 
       {cam && (
         <div className="scan-cam">
           <video ref={video} playsInline muted />
-          <button className="btn-primary" onClick={snap}>Ambil halaman</button>
+          <button className="btn-primary" onClick={snap} disabled={working}>Ambil halaman</button>
         </div>
       )}
 
@@ -116,7 +146,7 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
           <div className="scan-edit">
             <div className="scan-box">
               <small>Seret keempat titik emas ke sudut dokumen.</small>
-              <div className="scan-corners" style={{ aspectRatio: `${page.src.width} / ${page.src.height}` }}>
+              <div className="scan-corners" style={{ aspectRatio: `${page.w} / ${page.h}` }}>
                 <img src={page.url} alt="" />
                 <svg viewBox="0 0 1 1" preserveAspectRatio="none" onPointerMove={move} onPointerUp={() => (drag.current = null)} onPointerCancel={() => (drag.current = null)} style={{ touchAction: 'none' }}>
                   <polygon className="poly" points={page.q.map((c) => `${c.x},${c.y}`).join(' ')} />
@@ -128,7 +158,7 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
                 ))}
               </div>
               <div className="scan-bar">
-                <button onClick={() => patch((p) => ({ ...p, q: detectCorners(p.src) }))}>Deteksi ulang</button>
+                <button onClick={redetect}>Deteksi ulang</button>
                 <button onClick={() => patch((p) => ({ ...p, q: defaultCorners() }))}>Reset sudut</button>
               </div>
             </div>
@@ -138,6 +168,12 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
               <div className="scan-bar">
                 {FILTERS.map(([k, l]) => <button key={k} className={page.filter === k ? 'on' : ''} onClick={() => patch((p) => ({ ...p, filter: k }))}>{l}</button>)}
               </div>
+              {note && <p className="hint">Analisis di perangkat: {note}.</p>}
+              {page.filter === 'bw' && (
+                <div className="field"><label>Kepekaan tinta: {Math.round(page.ink * 100)}</label>
+                  <input type="range" min={55} max={92} value={Math.round(page.ink * 100)} onChange={(e) => patch((p) => ({ ...p, ink: +e.target.value / 100 }))} />
+                  <p className="hint">Turunkan jika muncul bintik. Naikkan jika tulisan tipis terputus.</p></div>
+              )}
               <div className="scan-bar">
                 <button onClick={() => patch((p) => ({ ...p, rot: p.rot + 3 }))} aria-label="Putar kiri">↺ Putar</button>
                 <button onClick={() => patch((p) => ({ ...p, rot: p.rot + 1 }))} aria-label="Putar kanan">↻ Putar</button>
@@ -163,7 +199,7 @@ export default function ScanStudio({ files, onDone, onError }: CustomProps) {
         </>
       )}
 
-      {!pages.length && !cam && <p className="hint">Buka kamera atau tambah foto dokumen. Semuanya diproses di perangkat Anda.</p>}
+      {!pages.length && !cam && !working && <p className="hint">Buka kamera atau tambah foto dokumen. Semuanya diproses di perangkat Anda.</p>}
     </div>
   );
 }
