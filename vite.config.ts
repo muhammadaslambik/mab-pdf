@@ -29,10 +29,16 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,mjs,css,html,svg,png,webmanifest}'],
+        // Berkas berat tidak ikut precache (hemat data di kunjungan pertama): diunduh sekali saat alatnya pertama dipakai, lalu disimpan.
+        globIgnores: ['**/pdf.worker*', '**/pptxgen*'],
+        cleanupOutdatedCaches: true,
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-        // data bahasa OCR & pustaka AI diunduh sekali lalu tersedia offline
         runtimeCaching: [
-          { urlPattern: /^https:\/\/(cdn\.jsdelivr\.net|tessdata\.projectnaptha\.com)\//, handler: 'CacheFirst', options: { cacheName: 'mab-cdn', expiration: { maxEntries: 60, maxAgeSeconds: 60 * 60 * 24 * 180 } } }
+          { urlPattern: ({ url, sameOrigin }: any) => sameOrigin && /\/assets\/(pdf\.worker|pptxgen)/.test(url.pathname), handler: 'CacheFirst',
+            options: { cacheName: 'mab-heavy', expiration: { maxEntries: 6, purgeOnQuotaError: true }, cacheableResponse: { statuses: [200] } } },
+          // pustaka AI & mesin OCR (versi dikunci di kode). Bobot model AI dicache WebLLM sendiri; JANGAN di-cache ganda di sini.
+          { urlPattern: /^https:\/\/cdn\.jsdelivr\.net\//, handler: 'CacheFirst',
+            options: { cacheName: 'mab-cdn', expiration: { maxEntries: 40, maxAgeSeconds: 60 * 60 * 24 * 365, purgeOnQuotaError: true }, cacheableResponse: { statuses: [200] } } }
         ]
       }
     })

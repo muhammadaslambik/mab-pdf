@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CustomProps } from '../tools/types';
 import { NO_TEXT, extractDoc } from '../lib/pdfText';
 import { defaultTier, hasWebGPU, llm, loadWebLLM, TIERS, type Tier } from '../lib/ai';
+import AiStorage from './AiStorage';
 import { Bm25, bestSentences, highlight, type Passage } from '../lib/nlp';
 
 interface Answer { q: string; quick: { text: string; page: number }[]; hits: { passage: Passage; terms: string[] }[]; ai?: string }
@@ -71,6 +72,7 @@ export default function AiAsk({ files, onError }: CustomProps) {
         </select>
       </div>
       {mode === 'ai' && <div className="field"><label htmlFor="at">Ukuran model</label><select id="at" value={tier} onChange={(e) => setTier(e.target.value as Tier)}>{(Object.keys(TIERS) as Tier[]).map((t) => <option key={t} value={t}>{TIERS[t].label}</option>)}</select></div>}
+      {mode === 'ai' && <AiStorage />}
       <div className="ann-search">
         <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && ask()} placeholder="Tulis pertanyaan tentang dokumen ini…" aria-label="Pertanyaan" />
         <button className="btn-primary" onClick={ask} disabled={busy || !q.trim()}>{busy ? '…' : 'Tanya'}</button>

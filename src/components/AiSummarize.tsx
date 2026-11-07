@@ -4,6 +4,7 @@ import { NO_TEXT, extractDoc } from '../lib/pdfText';
 import { chromeSummarize, chunkText, defaultTier, hasChromeSummarizer, hasWebGPU, llm, loadWebLLM, TIERS, type Engine, type Tier } from '../lib/ai';
 import { LANG_NAMES, detectLang, keywords, summarize } from '../lib/nlp';
 import { baseName } from '../lib/util';
+import AiStorage from './AiStorage';
 
 interface Section { title: string; page: number; text: string }
 interface Result { bullets: string[]; sections: { title: string; page: number; points: string[] }[]; keys: string[]; stats: { words: number; minutes: number; lang: string; pages: number }; llmText?: string }
@@ -91,6 +92,7 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
         <div className="field"><label htmlFor="lng">Bahasa hasil</label>
           <select id="lng" value={lang} onChange={(e) => setLang(e.target.value)}><option value="same">Sama dengan dokumen</option><option value="id">Indonesia</option><option value="en">Inggris</option></select></div>
       )}
+      {engine === 'webllm' && <AiStorage />}
       {busy ? (
         <div className="progress" role="status"><progress value={prog.p} max={100} /><span>{prog.l} · {prog.p}%</span><button className="btn-quiet" onClick={() => (stop.current = true)}>Batalkan</button></div>
       ) : <button className="btn-primary" onClick={run}>Rangkum</button>}

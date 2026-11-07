@@ -56,38 +56,86 @@ export async function chromeDetect(text: string): Promise<string | null> {
 }
 
 /* ---------- WebLLM (WebGPU) ---------- */
-const WEBLLM_URL = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2/+esm';
+import { cachedModelIds, ensurePersist, removeModels, storageInfo } from './storage';
+
+/** Versi pustaka dikunci sekali (disimpan di perangkat) agar alamat berkasnya tetap sama dan cache tidak basi. */
+const VER_KEY = 'mab-webllm-ver';
+async function webllmUrl() {
+  let v = '';
+  try { v = localStorage.getItem(VER_KEY) || ''; } catch { /* abaikan */ }
+  if (!/^\d+\.\d+\.\d+$/.test(v)) {
+    try {
+      const r = await fetch('https://data.jsdelivr.com/v1/package/resolve/npm/@mlc-ai/web-llm@0.2');
+      v = String((await r.json()).version || '');
+      if (/^\d+\.\d+\.\d+$/.test(v)) localStorage.setItem(VER_KEY, v);
+    } catch { v = ''; }
+  }
+  return `https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@${/^\d+\.\d+\.\d+$/.test(v) ? v : '0.2'}/+esm`;
+}
+
 export type Tier = 'light' | 'balanced' | 'smart';
 export const TIERS: Record<Tier, { label: string; ids: string[] }> = {
-  light: { label: 'Ringan (±0,4 GB, cepat, cocok untuk HP/laptop biasa)', ids: ['Qwen2.5-0.5B-Instruct-q4f16_1-MLC', 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC'] },
-  balanced: { label: 'Seimbang (±1 GB, disarankan)', ids: ['Qwen2.5-1.5B-Instruct-q4f16_1-MLC', 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC'] },
+  light: { label: 'Ringan (±0,4 GB, cepat, cocok untuk HP/laptop biasa)', ids: ['Qwen2.5-0.5B-Instruct-q4f16_1-MLC'] },
+  balanced: { label: 'Seimbang (±1 GB, disarankan)', ids: ['Qwen2.5-1.5B-Instruct-q4f16_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC'] },
   smart: { label: 'Pintar (±2 GB, butuh GPU yang memadai)', ids: ['Qwen2.5-3B-Instruct-q4f16_1-MLC', 'Llama-3.2-3B-Instruct-q4f16_1-MLC', 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC'] }
 };
-export const defaultTier = (): Tier => (((navigator as any).deviceMemory ?? 8) >= 8 ? 'balanced' : 'light');
+export const TIER_GB: Record<Tier, number> = { light: 0.5, balanced: 1.1, smart: 2.2 };
+const TIER_KEY = 'mab-ai-tier';
+/** Ukuran model dibagi antar semua alat AI: pilihan terakhir diingat, sehingga tidak mengunduh model lain tanpa sengaja. */
+export const defaultTier = (): Tier => {
+  try { const t = localStorage.getItem(TIER_KEY) as Tier | null; if (t && t in TIERS) return t; } catch { /* abaikan */ }
+  return ((navigator as any).deviceMemory ?? 8) >= 8 ? 'balanced' : 'light';
+};
+/** Pilih varian dtype yang didukung GPU, agar tidak mengunduh bobot yang lalu gagal dimuat. */
+export const swapDtype = (id: string, f16: boolean) => (f16 ? id.replace('q4f32_1', 'q4f16_1') : id.replace('q4f16_1', 'q4f32_1'));
+async function supportsF16() {
+  try { const a = await (navigator as any).gpu.requestAdapter(); return !!a?.features?.has('shader-f16'); } catch { return false; }
+}
+
 const engines = new Map<Tier, Promise<any>>();
+let idleTimer: any;
+/** Lepas model dari RAM/GPU bila tidak dipakai 5 menit (berkas di disk tetap; muat ulang hanya beberapa detik). */
+const touch = () => {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(async () => { for (const [t, e] of [...engines]) { engines.delete(t); try { (await e).unload?.(); } catch { /* abaikan */ } } }, 5 * 60_000);
+};
 
 export async function loadWebLLM(tier: Tier, onProgress: Progress): Promise<any> {
   if (!hasWebGPU()) throw new Error('Browser ini belum mendukung WebGPU. Coba Chrome atau Edge terbaru di laptop/desktop.');
   let p = engines.get(tier);
-  if (!p) {
-    // hemat memori: lepaskan model tingkat lain
-    for (const [t, e] of engines) if (t !== tier) { e.then((x) => x.unload?.()).catch(() => {}); engines.delete(t); }
-    p = (async () => {
-      const lib: any = await import(/* @vite-ignore */ WEBLLM_URL);
-      const list: string[] = lib.prebuiltAppConfig.model_list.map((m: any) => m.model_id);
-      const id = TIERS[tier].ids.find((x) => list.includes(x)) ?? list.find((m) => /(1\.5B|1B).*q4f16/i.test(m)) ?? list[0];
-      return lib.CreateMLCEngine(id, { initProgressCallback: (r: any) => onProgress(r.progress ?? 0, r.text ?? 'Memuat model') });
-    })().catch((e) => { engines.delete(tier); throw e; });
-    engines.set(tier, p);
-  }
+  if (p) { touch(); return p; }
+  for (const [t, e] of engines) if (t !== tier) { e.then((x) => x.unload?.()).catch(() => {}); engines.delete(t); }
+  p = (async () => {
+    const lib: any = await import(/* @vite-ignore */ await webllmUrl());
+    const f16 = await supportsF16();
+    const list: string[] = lib.prebuiltAppConfig.model_list.map((m: any) => m.model_id);
+    const id = TIERS[tier].ids.map((x) => swapDtype(x, f16)).find((x) => list.includes(x))
+      ?? list.find((m) => (f16 ? /(1\.5B|1B).*q4f16/i : /(1\.5B|1B).*q4f32/i).test(m)) ?? list[0];
+    const have = await cachedModelIds();
+    const cached = have.includes(id);
+    if (!cached) {
+      const { usage, quota } = await storageInfo();
+      if (quota && quota - usage < TIER_GB[tier] * 1.15 * 1024 ** 3)
+        throw new Error(`Ruang penyimpanan browser tidak cukup untuk model ini (butuh ±${TIER_GB[tier]} GB). Pilih ukuran model lebih kecil atau kosongkan disk.`);
+      await ensurePersist();
+    }
+    onProgress(0, cached ? 'Memuat model dari penyimpanan lokal (tanpa unduh)' : `Mengunduh model sekali saja (±${TIER_GB[tier]} GB)`);
+    const eng = await lib.CreateMLCEngine(id, { initProgressCallback: (r: any) => onProgress(r.progress ?? 0, cached ? 'Memuat model dari penyimpanan lokal (tanpa unduh)' : r.text ?? 'Mengunduh model') });
+    try { localStorage.setItem(TIER_KEY, tier); } catch { /* abaikan */ }
+    removeModels(have.filter((x) => x !== id)).catch(() => {}); // satu model saja di disk
+    touch();
+    return eng;
+  })().catch((e) => { engines.delete(tier); throw e; });
+  engines.set(tier, p);
   return p;
 }
 
 export async function llm(engine: any, system: string, user: string, maxTokens = 400, onToken?: (acc: string) => void): Promise<string> {
+  touch();
   const req = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: 0.2, max_tokens: maxTokens };
   if (!onToken) { const r = await engine.chat.completions.create(req); return String(r.choices?.[0]?.message?.content ?? '').trim(); }
   let acc = '';
-  for await (const chunk of await engine.chat.completions.create({ ...req, stream: true })) { acc += chunk.choices?.[0]?.delta?.content ?? ''; onToken(acc); }
+  for await (const chunk of await engine.chat.completions.create({ ...req, stream: true })) { acc += chunk.choices?.[0]?.delta?.content ?? ''; onToken(acc); touch(); }
   return acc.trim();
 }
 

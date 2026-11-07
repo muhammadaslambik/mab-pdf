@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { CustomProps } from '../tools/types';
 import { NO_TEXT, extractDoc } from '../lib/pdfText';
+import AiStorage from './AiStorage';
 import { LANGS, LATIN, chromeDetect, chromeTranslator, chunkText, defaultTier, hasChromeTranslator, hasWebGPU, llm, loadWebLLM, TIERS, type Tier } from '../lib/ai';
 import { LANG_NAMES, detectLang, protect } from '../lib/nlp';
 import { blocksToPdf, type Block, type Cell } from '../lib/layout';
@@ -102,6 +103,7 @@ export default function AiTranslate({ files, onDone, onError }: CustomProps) {
         </select>
         {!hasChromeTranslator() && !hasWebGPU() && <small className="hint">Browser ini belum punya penerjemah bawaan maupun WebGPU. Gunakan Chrome atau Edge terbaru di laptop/desktop.</small>}</div>
       {engine !== 'chrome' && hasWebGPU() && <div className="field"><label htmlFor="ttier">Ukuran model AI lokal</label><select id="ttier" value={tier} onChange={(e) => setTier(e.target.value as Tier)}>{(Object.keys(TIERS) as Tier[]).map((t) => <option key={t} value={t}>{TIERS[t].label}</option>)}</select></div>}
+      {engine !== 'chrome' && hasWebGPU() && <AiStorage />}
       {busy ? (
         <div className="progress" role="status"><progress value={prog.p} max={100} /><span>{prog.l} · {prog.p}%</span>
           <button className="btn-quiet" onClick={() => (stop.current = true)}>Hentikan & simpan yang sudah jadi</button></div>
