@@ -37,7 +37,7 @@ export function unpredict(data: Uint8Array, predictor: number, columns: number, 
 export const imageEntries = (pc: PDFContext) =>
   pc.enumerateIndirectObjects().filter(([, o]) => o instanceof PDFRawStream && (o as PDFRawStream).dict.lookup(PDFName.of('Subtype')) === PDFName.of('Image')) as [PDFRef, PDFRawStream][];
 
-export interface PdfImage { w: number; h: number; isDct: boolean; jpeg?: Uint8Array; source: ImageBitmap | HTMLCanvasElement; origSize: number }
+export interface PdfImage { w: number; h: number; isDct: boolean; jpeg?: Uint8Array; source: ImageBitmap | HTMLCanvasElement | OffscreenCanvas; origSize: number }
 
 /** Dekode satu gambar PDF. Mengembalikan null untuk format yang tidak didukung (mask, CMYK-Flate, Indexed, JPX, dll). */
 export async function readImage(pc: PDFContext, obj: PDFRawStream): Promise<PdfImage | null> {
@@ -76,7 +76,7 @@ export async function readImage(pc: PDFContext, obj: PDFRawStream): Promise<PdfI
     if (colors === 3) { rgba[o] = raw[p * 3]; rgba[o + 1] = raw[p * 3 + 1]; rgba[o + 2] = raw[p * 3 + 2]; } else { rgba[o] = rgba[o + 1] = rgba[o + 2] = raw[p]; }
     rgba[o + 3] = 255;
   }
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  c.getContext('2d')!.putImageData(new ImageData(rgba, w, h), 0, 0);
+  const c: any = typeof document !== 'undefined' ? Object.assign(document.createElement('canvas'), { width: w, height: h }) : new OffscreenCanvas(w, h);
+  c.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
   return { w, h, isDct, origSize, source: c };
 }

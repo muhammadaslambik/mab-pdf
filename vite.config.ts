@@ -30,7 +30,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,mjs,css,html,svg,png,webmanifest}'],
         // Berkas berat tidak ikut precache (hemat data di kunjungan pertama): diunduh sekali saat alatnya pertama dipakai, lalu disimpan.
-        globIgnores: ['**/pdf.worker*', '**/pptxgen*'],
+        globIgnores: ['**/compress.worker*', '**/pdf.worker*', '**/pptxgen*'],
         cleanupOutdatedCaches: true,
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [

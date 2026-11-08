@@ -1,7 +1,7 @@
-import { PDFDict, PDFDocument, PDFImage, PDFName, PDFRawStream } from 'pdf-lib';
-import { imageEntries, numOf, readImage } from '../../lib/pdfImages';
+import { PDFDocument, PDFImage } from 'pdf-lib';
+import { smartCompress } from '../../lib/compressClient';
 import type { RunFn } from '../types';
-import { canvasToBlob, loadPdf, openPdfJs, releaseCanvas, renderPage } from '../../lib/pdf';
+import { canvasToBlob, openPdfJs, releaseCanvas, renderPage } from '../../lib/pdf';
 import { baseName, formatBytes, pdfResult, tick, zipResult } from '../../lib/util';
 
 /* ---------- Gambar -> PDF (juga dipakai fitur Pindai) ---------- */
@@ -83,45 +83,7 @@ export const pdfToJpg: RunFn = async ([file], o, ctx) => {
 
 /* ---------- Kompres cerdas: perkecil gambar di dalam PDF, teks tetap vektor ---------- */
 
-const LEVELS: Record<string, { side: number; q: number }> = {
-  extreme: { side: 1000, q: 0.5 }, recommended: { side: 1600, q: 0.68 }, light: { side: 2400, q: 0.82 }
-};
 const RASTER: Record<string, { scale: number; quality: number }> = { extreme: { scale: 1.0, quality: 0.5 }, recommended: { scale: 1.5, quality: 0.7 }, light: { scale: 2.0, quality: 0.85 } };
-
-async function smartCompress(file: File, level: string, ctx: Parameters<RunFn>[2]) {
-  const { side, q } = LEVELS[level] ?? LEVELS.recommended;
-  const pdf = await loadPdf(file);
-  const pc = pdf.context;
-  const entries = imageEntries(pc);
-  let changed = 0, saved = 0;
-  for (let i = 0; i < entries.length; i++) {
-    ctx.check(); ctx.progress((i / Math.max(1, entries.length)) * 90, `Gambar ${i + 1}/${entries.length}`);
-    const [ref, obj] = entries[i];
-    try {
-      const w0 = numOf(obj.dict, 'Width') ?? 0, h0 = numOf(obj.dict, 'Height') ?? 0;
-      const k = Math.min(1, side / Math.max(w0, h0, 1));
-      if (k === 1 && obj.getContentsSize() < w0 * h0 * 0.12) continue; // sudah ringan
-      const img = await readImage(pc, obj);
-      if (!img) continue;
-      const nw = Math.max(1, Math.round(img.w * k)), nh = Math.max(1, Math.round(img.h * k));
-      const out = document.createElement('canvas'); out.width = nw; out.height = nh;
-      const g = out.getContext('2d')!; g.imageSmoothingQuality = 'high'; g.fillStyle = '#fff'; g.fillRect(0, 0, nw, nh);
-      g.drawImage(img.source, 0, 0, nw, nh);
-      if ('close' in img.source) img.source.close();
-      const blob = await canvasToBlob(out, 'image/jpeg', q);
-      releaseCanvas(out);
-      if (blob.size > img.origSize * (img.isDct ? 0.92 : 0.7)) continue; // tidak sepadan
-      const nd = pc.obj({ Type: 'XObject', Subtype: 'Image', Width: nw, Height: nh, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' }) as PDFDict;
-      for (const key of ['SMask', 'Intent', 'Interpolate']) { const v = obj.dict.get(PDFName.of(key)); if (v) nd.set(PDFName.of(key), v); }
-      pc.assign(ref, PDFRawStream.of(nd, new Uint8Array(await blob.arrayBuffer())));
-      changed++; saved += img.origSize - blob.size;
-    } catch { continue; }
-    await tick();
-  }
-  pdf.setProducer('MAB-PDF');
-  ctx.progress(95, 'Menyimpan');
-  return { bytes: await pdf.save({ useObjectStreams: true }), changed, total: entries.length, saved };
-}
 
 async function rasterCompress(file: File, level: string, ctx: Parameters<RunFn>[2]) {
   const { scale, quality } = RASTER[level] ?? RASTER.recommended;
