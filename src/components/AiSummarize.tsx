@@ -3,6 +3,8 @@ import type { CustomProps } from '../tools/types';
 import { NO_TEXT, extractDoc } from '../lib/pdfText';
 import { chromeSummarize, chunkText, defaultTier, hasChromeSummarizer, hasWebGPU, llm, loadWebLLM, TIERS, type Engine, type Tier } from '../lib/ai';
 import { LANG_NAMES, detectLang, keywords, summarize } from '../lib/nlp';
+import { analyzeDoc } from '../lib/docStruct';
+import { llmReport, offlineReport } from '../lib/summaryReport';
 import { baseName } from '../lib/util';
 import AiStorage from './AiStorage';
 
@@ -39,14 +41,24 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
       const base: Result = { bullets: [], sections: [], keys: keywords(text, 10), stats: { words, minutes: Math.max(1, Math.round(words / 200)), lang: LANG_NAMES[detectLang(text)] ?? 'tidak diketahui', pages: d.pages.length } };
       const n = { short: 4, medium: 7, long: 12 }[length];
       let md = '';
+      const st = analyzeDoc(d.pages, d.body);
+      const structured = (st.sections.length > 0 || !!st.abstract) && text.length > 600;
+      const ropts = { name: file.name, pages: d.pages.length, len: length, perSection };
 
-      if (engine === 'extractive') {
+      if (engine === 'extractive' && structured) {
+        P(0.6, 'Menyusun laporan dari struktur dokumen');
+        base.llmText = offlineReport(st, ropts);
+      } else if (engine === 'extractive') {
         P(0.5, 'Menilai kalimat penting');
         base.bullets = summarize(text, n);
         if (!base.bullets.length) throw new Error('Teks terlalu pendek untuk dirangkum.');
         if (perSection) base.sections = sections.filter((s) => s.text.length > 200).slice(0, 14).map((s) => ({ title: s.title, page: s.page, points: summarize(s.text, length === 'long' ? 2 : 1) })).filter((s) => s.points.length);
       } else if (engine === 'chrome') {
         base.llmText = await chromeSummarize(text, length, (f, l) => P(0.25 + f * 0.75, l));
+      } else if (structured) {
+        const e = await loadWebLLM(tier, (f, l) => P(0.25 + f * 0.3, l));
+        const r = await llmReport(st, { ...ropts, target: lang === 'same' ? 'same' : lang === 'id' ? 'id' : 'en', ask: (sy, us, mx) => llm(e, sy, us, mx), step: (f, l) => P(0.55 + f * 0.43, l), check });
+        base.llmText = r.md;
       } else {
         const e = await loadWebLLM(tier, (f, l) => P(0.25 + f * 0.3, l));
         const target = lang === 'same' ? 'the same language as the text' : lang === 'id' ? 'Indonesian' : 'English';
@@ -62,10 +74,11 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
         base.llmText = units.length > 1 ? await llm(e, sys, `Combine these partial summaries into one coherent summary of about ${words2} words, as bullet points:\n\n${parts.join('\n')}`, 520, (acc) => setRes({ ...base, llmText: acc })) : parts[0];
       }
       setRes(base);
-      md = `# Ringkasan: ${file.name}\n\n` + (base.llmText ? base.llmText + '\n' : base.bullets.map((b) => `- ${b}`).join('\n') + '\n') +
+      const isReport = !!base.llmText && base.llmText.startsWith('# Rangkuman');
+      md = isReport ? base.llmText! : `# Ringkasan: ${file.name}\n\n` + (base.llmText ? base.llmText + '\n' : base.bullets.map((b) => `- ${b}`).join('\n') + '\n') +
         (base.sections.length ? `\n## Poin per bagian\n\n` + base.sections.map((s) => `**${s.title}** (hlm. ${s.page})\n` + s.points.map((p) => `- ${p}`).join('\n')).join('\n\n') + '\n' : '') +
         `\n## Kata kunci\n\n${base.keys.join(', ')}\n\n## Statistik\n\n${base.stats.words} kata, ±${base.stats.minutes} menit baca, ${base.stats.pages} halaman, bahasa: ${base.stats.lang}\n`;
-      onDone({ files: [{ name: `${baseName(file.name)}-ringkasan.md`, blob: new Blob([md], { type: 'text/markdown' }) }], note: engine === 'extractive' ? 'Ringkasan dipilih dari kalimat asli dokumen (TextRank + penyaring redundansi), jadi tidak ada fakta karangan.' : 'Ringkasan dibuat model AI di perangkat Anda. Periksa kembali sebelum dipakai; AI bisa keliru.' });
+      onDone({ files: [{ name: `${baseName(file.name)}-ringkasan.md`, blob: new Blob([md], { type: 'text/markdown' }) }], note: engine === 'extractive' ? 'Laporan disusun dari kalimat asli dokumen (judul bagian, abstrak, angka, kesimpulan), jadi tidak ada fakta karangan.' : 'Ringkasan dibuat model AI di perangkat Anda; angka diperiksa terhadap teks sumber. Tetap periksa kembali sebelum dipakai.' });
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }
   };
 
@@ -74,16 +87,16 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
       <div className="field">
         <label htmlFor="eng">Mesin ringkasan</label>
         <select id="eng" value={engine} onChange={(e) => setEngine(e.target.value as Engine)}>
-          <option value="extractive">Pintar offline: kalimat penting (semua bahasa, instan, tanpa unduhan)</option>
+          <option value="extractive">Pintar offline: laporan terstruktur dari kalimat asli (instan, tanpa unduhan)</option>
           {hasChromeSummarizer() && <option value="chrome">AI bawaan Chrome (output bahasa Inggris)</option>}
-          {hasWebGPU() && <option value="webllm">AI generatif lokal WebGPU (menulis ulang, mendukung Indonesia)</option>}
+          {hasWebGPU() && <option value="webllm">AI generatif lokal WebGPU (menulis ulang dengan bahasa lebih sederhana, angka diperiksa)</option>}
         </select>
         {!hasWebGPU() && <small className="hint">AI generatif butuh browser dengan WebGPU (Chrome/Edge terbaru di laptop atau desktop).</small>}
       </div>
       {engine === 'webllm' && (
         <div className="field"><label htmlFor="tier">Ukuran model</label>
           <select id="tier" value={tier} onChange={(e) => setTier(e.target.value as Tier)}>{(Object.keys(TIERS) as Tier[]).map((t) => <option key={t} value={t}>{TIERS[t].label}</option>)}</select>
-          <small className="hint">Diunduh sekali lalu tersimpan di browser. File dokumen tidak pernah dikirim ke mana pun.</small></div>
+          <small className="hint">Untuk hasil rapi pilih Seimbang atau Pintar. Diunduh sekali lalu tersimpan di browser. File dokumen tidak pernah dikirim ke mana pun.</small></div>
       )}
       <div className="field"><label htmlFor="len">Panjang</label>
         <select id="len" value={length} onChange={(e) => setLength(e.target.value as any)}><option value="short">Singkat</option><option value="medium">Sedang</option><option value="long">Rinci</option></select></div>

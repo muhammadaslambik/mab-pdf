@@ -2,7 +2,7 @@
 import { openPdfJs } from './pdf';
 import { tick } from './util';
 
-export interface TItem { x: number; w: number; s: string }
+export interface TItem { x: number; w: number; s: string; size?: number; sup?: boolean }
 export interface TLine { y: number; size: number; text: string; x0: number; x1: number; items: TItem[] }
 export interface DocPara { text: string; kind: 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'row'; size: number; cells?: string[] }
 export interface PageData { width: number; height: number; lines: TLine[]; paras: DocPara[] }
@@ -32,11 +32,12 @@ export async function pageLines(page: any): Promise<TLine[]> {
     let row = rows.find((r) => Math.abs(r.y - y) < Math.max(2, size * 0.3));
     if (!row) rows.push((row = { y, size, items: [] }));
     row.size = Math.max(row.size, size);
-    row.items.push({ x: it.transform[4], w: it.width ?? 0, s: it.str });
+    row.items.push({ x: it.transform[4], w: it.width ?? 0, s: it.str, size });
   }
   rows.sort((a, b) => b.y - a.y);
   return rows.map((r) => {
     r.items.sort((a, b) => a.x - b.x);
+    for (const it of r.items) it.sup = (it.size ?? r.size) < r.size * 0.8; // superskrip (penanda catatan kaki)
     let text = '', end = -Infinity;
     for (const p of r.items) {
       if (text && p.x - end > r.size * 0.15 && !text.endsWith(' ') && !p.s.startsWith(' ')) text += ' ';

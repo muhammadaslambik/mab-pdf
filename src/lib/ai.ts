@@ -100,43 +100,68 @@ const touch = () => {
   idleTimer = setTimeout(async () => { for (const [t, e] of [...engines]) { engines.delete(t); try { (await e).unload?.(); } catch { /* abaikan */ } } }, 5 * 60_000);
 };
 
+async function createRaw(tier: Tier, onProgress: Progress): Promise<{ eng: any; id: string }> {
+  const lib: any = await import(/* @vite-ignore */ await webllmUrl());
+  const f16 = await supportsF16();
+  const list: string[] = lib.prebuiltAppConfig.model_list.map((m: any) => m.model_id);
+  const id = TIERS[tier].ids.map((x) => swapDtype(x, f16)).find((x) => list.includes(x))
+    ?? list.find((m) => (f16 ? /(1\.5B|1B).*q4f16/i : /(1\.5B|1B).*q4f32/i).test(m)) ?? list[0];
+  const norm = (x: string) => x.replace(/-MLC$/, '');
+  const have = await cachedModelIds();
+  const cached = have.some((x) => norm(x) === norm(id));
+  if (!cached) {
+    const { usage, quota } = await storageInfo();
+    if (quota && quota - usage < TIER_GB[tier] * 1.15 * 1024 ** 3)
+      throw new Error(`Ruang penyimpanan browser tidak cukup untuk model ini (butuh ±${TIER_GB[tier]} GB). Pilih ukuran model lebih kecil atau kosongkan disk.`);
+    await ensurePersist();
+  }
+  onProgress(0, cached ? 'Memuat model dari penyimpanan lokal (tanpa unduh)' : `Mengunduh model sekali saja (±${TIER_GB[tier]} GB)`);
+  const eng = await lib.CreateMLCEngine(id, { initProgressCallback: (r: any) => onProgress(r.progress ?? 0, cached ? 'Memuat model dari penyimpanan lokal (tanpa unduh)' : r.text ?? 'Mengunduh model') });
+  try { localStorage.setItem(TIER_KEY, tier); } catch { /* abaikan */ }
+  removeModels(have.filter((x) => norm(x) !== norm(id))).catch(() => {}); // satu model saja di disk (jangan hapus model yang sedang dipakai)
+  return { eng, id };
+}
+
+/** Pembungkus stabil: bila mesin rusak (model dibuang / GPU di-reset), isinya diganti mesin baru tanpa mengubah rujukan pemanggil. */
 export async function loadWebLLM(tier: Tier, onProgress: Progress): Promise<any> {
   if (!hasWebGPU()) throw new Error('Browser ini belum mendukung WebGPU. Coba Chrome atau Edge terbaru di laptop/desktop.');
   let p = engines.get(tier);
   if (p) { touch(); return p; }
   for (const [t, e] of engines) if (t !== tier) { e.then((x) => x.unload?.()).catch(() => {}); engines.delete(t); }
   p = (async () => {
-    const lib: any = await import(/* @vite-ignore */ await webllmUrl());
-    const f16 = await supportsF16();
-    const list: string[] = lib.prebuiltAppConfig.model_list.map((m: any) => m.model_id);
-    const id = TIERS[tier].ids.map((x) => swapDtype(x, f16)).find((x) => list.includes(x))
-      ?? list.find((m) => (f16 ? /(1\.5B|1B).*q4f16/i : /(1\.5B|1B).*q4f32/i).test(m)) ?? list[0];
-    const have = await cachedModelIds();
-    const cached = have.includes(id);
-    if (!cached) {
-      const { usage, quota } = await storageInfo();
-      if (quota && quota - usage < TIER_GB[tier] * 1.15 * 1024 ** 3)
-        throw new Error(`Ruang penyimpanan browser tidak cukup untuk model ini (butuh ±${TIER_GB[tier]} GB). Pilih ukuran model lebih kecil atau kosongkan disk.`);
-      await ensurePersist();
-    }
-    onProgress(0, cached ? 'Memuat model dari penyimpanan lokal (tanpa unduh)' : `Mengunduh model sekali saja (±${TIER_GB[tier]} GB)`);
-    const eng = await lib.CreateMLCEngine(id, { initProgressCallback: (r: any) => onProgress(r.progress ?? 0, cached ? 'Memuat model dari penyimpanan lokal (tanpa unduh)' : r.text ?? 'Mengunduh model') });
-    try { localStorage.setItem(TIER_KEY, tier); } catch { /* abaikan */ }
-    removeModels(have.filter((x) => x !== id)).catch(() => {}); // satu model saja di disk
+    const { eng, id } = await createRaw(tier, onProgress);
+    const w: any = { __cur: eng, __id: id, __tier: tier, unload: () => w.__cur?.unload?.(), chat: { completions: { create: (...a: any[]) => w.__cur.chat.completions.create(...a) } } };
+    const proxy: any = new Proxy(w, { get: (t, k) => (k in t ? t[k] : typeof t.__cur?.[k] === 'function' ? t.__cur[k].bind(t.__cur) : t.__cur?.[k]) });
     touch();
-    return eng;
+    return proxy;
   })().catch((e) => { engines.delete(tier); throw e; });
   engines.set(tier, p);
   return p;
 }
 
+async function recoverEngine(w: any): Promise<void> {
+  try { await w.__cur?.unload?.(); } catch { /* abaikan */ }
+  const { eng } = await createRaw(w.__tier, () => {});
+  w.__cur = eng;
+}
+
 export async function llm(engine: any, system: string, user: string, maxTokens = 400, onToken?: (acc: string) => void): Promise<string> {
   touch();
   const req = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: 0.2, max_tokens: maxTokens };
-  if (!onToken) { const r = await engine.chat.completions.create(req); return String(r.choices?.[0]?.message?.content ?? '').trim(); }
-  let acc = '';
-  for await (const chunk of await engine.chat.completions.create({ ...req, stream: true })) { acc += chunk.choices?.[0]?.delta?.content ?? ''; onToken(acc); touch(); }
-  return acc.trim();
+  const run = async (): Promise<string> => {
+    if (!onToken) { const r = await engine.chat.completions.create(req); return String(r.choices?.[0]?.message?.content ?? '').trim(); }
+    let acc = '';
+    for await (const chunk of await engine.chat.completions.create({ ...req, stream: true })) { acc += chunk.choices?.[0]?.delta?.content ?? ''; onToken(acc); touch(); }
+    return acc.trim();
+  };
+  for (let attempt = 0; ; attempt++) {
+    try { return await run(); } catch (e: any) {
+      const msg = String(e?.message || e);
+      console.warn('[MAB-AI] kesalahan model:', msg, e);
+      if (attempt < 2 && /not loaded|disposed|lost|reload\(/i.test(msg) && engine?.__tier) { console.warn('[MAB-AI] membuat ulang mesin, percobaan', attempt + 1); await recoverEngine(engine); continue; }
+      throw e;
+    }
+  }
 }
 
 export const LANGS: Record<string, string> = {
