@@ -39,22 +39,54 @@ export function bodySize(pages: PageLike[]): number {
 
 const key = (s: string) => s.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim();
 
+/** Nomor catatan kaki yang ada di baris catatan kaki (awal tiap kolom). */
+function noteNums(l: TLine, pg: PageLike, out: number[]) {
+  const its = [...l.items].sort((x, y) => x.x - y.x);
+  const isNum = (s: string) => /^\d{1,3}$/.test(s.trim());
+  const left = its.find((i) => i.x < pg.width / 2);
+  if (left && isNum(left.s)) out.push(+left.s.trim());
+  const ri = its.findIndex((i) => i.x >= pg.width / 2);
+  if (ri >= 0 && isNum(its[ri].s) && (ri === 0 || its[ri].x - (its[ri - 1].x + its[ri - 1].w) > 8)) out.push(+its[ri].s.trim());
+  if (!left && !out.length) { const m = /^(\d{1,3})\s/.exec(l.text); if (m) out.push(+m[1]); }
+}
+
 /** Buang header/footer berulang, nomor halaman, dan catatan kaki (huruf kecil di dasar halaman). */
-function keepLines(pages: PageLike[], body: number): TLine[][] {
+function keepLines(pages: PageLike[], body: number): { kept: TLine[][]; notes: number[][] } {
   const seen = new Map<string, Set<number>>();
   const inMargin = (l: TLine, pg: PageLike) => l.y > pg.height * 0.9 || l.y < pg.height * 0.08;
   pages.forEach((pg, pi) => pg.lines.forEach((l) => { if (inMargin(l, pg)) { const k = key(l.text); (seen.get(k) ?? seen.set(k, new Set()).get(k)!).add(pi); } }));
   const need = Math.max(2, Math.ceil(pages.length * 0.3));
-  return pages.map((pg) => pg.lines.filter((l) => {
+  const notes: number[][] = pages.map(() => []);
+  const kept = pages.map((pg, pi) => pg.lines.filter((l) => {
     if (!l.text.trim()) return false;
-    if (/^\d{1,3}$/.test(l.text.trim()) && l.size < body * 0.85) return false;
+    if (/^[.,;\s]*(\d{1,3}[.,;\s]*)+$/.test(l.text.trim()) && l.size < body * 0.85) {
+      if (l.y < pg.height * 0.4) (l.text.match(/\d{1,3}/g) ?? []).forEach((n) => notes[pi].push(+n));
+      return false;
+    }
     if (inMargin(l, pg)) {
       if ((seen.get(key(l.text))?.size ?? 0) >= need) return false;
       if (/^([ivxlc]{1,5}|\d{1,4})$/i.test(l.text.trim()) || /^(hal|hlm|page)\.?\s*\d+$/i.test(l.text.trim())) return false;
     }
-    if (l.size < body * 0.9 && l.y < pg.height * 0.4) return false; // catatan kaki
+    if (l.size < body * 0.9 && l.y < pg.height * 0.4) { noteNums(l, pg, notes[pi]); return false; } // catatan kaki
     return true;
   }));
+  return { kept, notes };
+}
+
+interface MarkSt { F: Set<number>; m: number }
+/** Buang penanda catatan kaki yang menempel di teks (pdf.js sering menggabungkannya dengan kata di sebelahnya). */
+export function stripMarkers(text: string, st: MarkSt): string {
+  if (!st.F.size) return text;
+  const ok = (v: number) => st.F.has(v) && v >= st.m && v <= st.m + 2;
+  const out: string[] = [];
+  for (const tok of text.split(/\s+/)) {
+    let t = tok, m: RegExpExecArray | null;
+    if ((m = /^[.,;](\d{1,3})$/.exec(t)) && st.F.has(+m[1])) { st.m = Math.max(st.m, +m[1] + 1); continue; }
+    if ((m = /^(\d{1,3})$/.exec(t)) && ok(+m[1])) { st.m = +m[1] + 1; continue; }
+    if ((m = /^(.*[\p{L}.,;:)\u201d"\u2019])(\d{1,3})$/u.exec(t)) && ok(+m[2])) { st.m = +m[2] + 1; t = m[1]; }
+    if (t) out.push(t);
+  }
+  return out.join(' ');
 }
 
 /** Cari celah vertikal (antar kolom). Mengembalikan x tengah celah, atau null untuk satu kolom. */
@@ -116,7 +148,7 @@ function headSpan(s: OLine[], i: number, body: number, pitch: number, prevHead: 
 }
 
 export function analyzeDoc(pages: PageLike[], body = bodySize(pages)): Struct {
-  const kept = keepLines(pages, body);
+  const { kept, notes } = keepLines(pages, body);
   // judul: baris terbesar di halaman 1
   let title = '';
   const titleSet = new Set<TLine>();
@@ -168,6 +200,9 @@ export function analyzeDoc(pages: PageLike[], body = bodySize(pages)): Struct {
       const [cl, cr] = s.side === 'L' ? bL : s.side === 'R' ? bR : bF;
       s.lines.forEach((o) => { o.colL = cl; o.colR = cr; });
     }
+    const F = new Set(notes[pi]);
+    const mst: MarkSt = { F, m: F.size ? Math.min(...F) : 0 };
+    for (const s of segs) s.lines.forEach((o) => { o.text = stripMarkers(o.text, mst); });
 
     for (const s of segs) {
       if (stop) break;

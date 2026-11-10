@@ -7,13 +7,20 @@ import { analyzeDoc } from '../lib/docStruct';
 import { llmReport, offlineReport } from '../lib/summaryReport';
 import { baseName } from '../lib/util';
 import AiStorage from './AiStorage';
+import { loadRemoteCfg, pingRemote, remoteAsk, saveRemoteCfg, type RemoteCfg } from '../lib/remoteLlm';
+
+type Eng = Engine | 'server';
 
 interface Section { title: string; page: number; text: string }
 interface Result { bullets: string[]; sections: { title: string; page: number; points: string[] }[]; keys: string[]; stats: { words: number; minutes: number; lang: string; pages: number }; llmText?: string }
 
 export default function AiSummarize({ files, onDone, onError }: CustomProps) {
   const file = files[0];
-  const [engine, setEngine] = useState<Engine>('extractive');
+  const [engine, setEngine] = useState<Eng>('extractive');
+  const [rc, setRc] = useState<RemoteCfg>(loadRemoteCfg());
+  const [consent, setConsent] = useState(false);
+  const [pingMsg, setPingMsg] = useState('');
+  const setCfg = (p: Partial<RemoteCfg>) => { const n = { ...rc, ...p }; setRc(n); saveRemoteCfg(n); setPingMsg(''); };
   const [tier, setTier] = useState<Tier>(defaultTier());
   const [length, setLength] = useState<'short' | 'medium' | 'long'>('medium');
   const [perSection, setPerSection] = useState(true);
@@ -55,6 +62,12 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
         if (perSection) base.sections = sections.filter((s) => s.text.length > 200).slice(0, 14).map((s) => ({ title: s.title, page: s.page, points: summarize(s.text, length === 'long' ? 2 : 1) })).filter((s) => s.points.length);
       } else if (engine === 'chrome') {
         base.llmText = await chromeSummarize(text, length, (f, l) => P(0.25 + f * 0.75, l));
+      } else if (engine === 'server') {
+        if (!structured) throw new Error('Dokumen ini terlalu pendek atau tanpa struktur untuk mode AI server. Pakai Pintar offline.');
+        if (!consent) throw new Error('Centang persetujuan pengiriman teks ke server AI dulu.');
+        P(0.3, 'Menghubungi server AI');
+        const r = await llmReport(st, { ...ropts, maxChars: 6000, chunk: true, where: 'server', target: lang === 'same' ? 'same' : lang === 'id' ? 'id' : 'en', ask: (sy, us, mx) => remoteAsk(rc, sy, us, mx), step: (f, l) => P(0.3 + f * 0.68, l), check });
+        base.llmText = r.md;
       } else if (structured) {
         const e = await loadWebLLM(tier, (f, l) => P(0.25 + f * 0.3, l));
         const r = await llmReport(st, { ...ropts, target: lang === 'same' ? 'same' : lang === 'id' ? 'id' : 'en', ask: (sy, us, mx) => llm(e, sy, us, mx), step: (f, l) => P(0.55 + f * 0.43, l), check });
@@ -86,10 +99,12 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
     <div className="fields">
       <div className="field">
         <label htmlFor="eng">Mesin ringkasan</label>
-        <select id="eng" value={engine} onChange={(e) => setEngine(e.target.value as Engine)}>
+        <select id="eng" value={engine} onChange={(e) => setEngine(e.target.value as Eng)}>
           <option value="extractive">Pintar offline: laporan terstruktur dari kalimat asli (instan, tanpa unduhan)</option>
           {hasChromeSummarizer() && <option value="chrome">AI bawaan Chrome (output bahasa Inggris)</option>}
           {hasWebGPU() && <option value="webllm">AI generatif lokal WebGPU (menulis ulang dengan bahasa lebih sederhana, angka diperiksa)</option>}
+        
+          <option value="server">AI server (eksperimental: teks dokumen dikirim ke server)</option>
         </select>
         {!hasWebGPU() && <small className="hint">AI generatif butuh browser dengan WebGPU (Chrome/Edge terbaru di laptop atau desktop).</small>}
       </div>
@@ -98,10 +113,24 @@ export default function AiSummarize({ files, onDone, onError }: CustomProps) {
           <select id="tier" value={tier} onChange={(e) => setTier(e.target.value as Tier)}>{(Object.keys(TIERS) as Tier[]).map((t) => <option key={t} value={t}>{TIERS[t].label}</option>)}</select>
           <small className="hint">Untuk hasil rapi pilih Seimbang atau Pintar. Diunduh sekali lalu tersimpan di browser. File dokumen tidak pernah dikirim ke mana pun.</small></div>
       )}
+      {engine === 'server' && (
+        <div className="field">
+          <label htmlFor="rurl">Alamat server AI</label>
+          <input id="rurl" type="text" value={rc.url} placeholder="https://xxxx.trycloudflare.com" onChange={(e) => setCfg({ url: e.target.value })} />
+          <label htmlFor="rmod">Nama model</label>
+          <input id="rmod" type="text" value={rc.model} onChange={(e) => setCfg({ model: e.target.value })} />
+          <label htmlFor="rkey">Kunci API (opsional)</label>
+          <input id="rkey" type="password" value={rc.key} onChange={(e) => setCfg({ key: e.target.value })} />
+          <button type="button" className="btn-quiet" onClick={async () => { setPingMsg('Menguji...'); try { const m = await pingRemote(rc); setPingMsg(`Terhubung. Model tersedia: ${m.join(', ') || '(tidak terdaftar)'}`); } catch (e: any) { setPingMsg(e.message); } }}>Tes koneksi</button>
+          {pingMsg && <small className="hint">{pingMsg}</small>}
+          <label className="check"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /> Saya paham teks dokumen ini dikirim ke server di atas (bukan file PDF-nya)</label>
+          <small className="hint">Untuk uji, jalankan docs/colab/mab-ai-server.ipynb di Google Colab (GPU T4) dan tempel alamat yang ditampilkannya.</small>
+        </div>
+      )}
       <div className="field"><label htmlFor="len">Panjang</label>
         <select id="len" value={length} onChange={(e) => setLength(e.target.value as any)}><option value="short">Singkat</option><option value="medium">Sedang</option><option value="long">Rinci</option></select></div>
       <label className="check"><input type="checkbox" checked={perSection} onChange={(e) => setPerSection(e.target.checked)} /> Ringkas per bagian (memakai judul di dokumen)</label>
-      {engine === 'webllm' && (
+      {(engine === 'webllm' || engine === 'server') && (
         <div className="field"><label htmlFor="lng">Bahasa hasil</label>
           <select id="lng" value={lang} onChange={(e) => setLang(e.target.value)}><option value="same">Sama dengan dokumen</option><option value="id">Indonesia</option><option value="en">Inggris</option></select></div>
       )}

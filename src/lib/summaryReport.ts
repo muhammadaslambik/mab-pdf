@@ -76,7 +76,7 @@ export function offlineReport(st: Struct, o: ReportOpts): string {
 
 /* ---------- Mode AI (WebLLM) dengan verifikasi angka ---------- */
 export type Ask = (system: string, user: string, maxTokens: number) => Promise<string>;
-export interface LlmOpts extends ReportOpts { target: 'id' | 'en' | 'same'; ask: Ask; step: (frac: number, label: string) => void; check: () => void }
+export interface LlmOpts extends ReportOpts { target: 'id' | 'en' | 'same'; ask: Ask; maxChars?: number; chunk?: boolean; where?: 'device' | 'server'; step: (frac: number, label: string) => void; check: () => void }
 
 function condense(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -84,8 +84,16 @@ function condense(text: string, max: number): string {
   return summarize(text, Math.max(3, Math.floor((n * max) / text.length))).join(' ');
 }
 
+function splitChunks(text: string, max: number): string[] {
+  const out: string[] = []; let cur = '';
+  for (const t of sentences(text)) { if (cur && cur.length + t.length > max) { out.push(cur.trim()); cur = ''; } cur += t + ' '; }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
 export async function llmReport(st: Struct, o: LlmOpts): Promise<{ md: string; fallback: number; checked: number }> {
   const c = CFG[o.len];
+  const MAXC = o.maxChars ?? 3200;
   const docLang = detectLang(fullText(st));
   const id = o.target === 'id' || (o.target === 'same' && (docLang === 'id' || docLang === 'ms'));
   const tgt = o.target === 'en' ? 'English' : o.target === 'id' ? 'Indonesian' : 'the same language as the text';
@@ -102,26 +110,35 @@ export async function llmReport(st: Struct, o: LlmOpts): Promise<{ md: string; f
   };
   const guard = (out: string, src: string) => { checked++; const bad = unsupportedNumbers(out, src); if (bad.length) { fallback++; return false; } return true; };
 
-  const body = st.sections.filter((s) => !isConc(s) && s.text.length > 300).slice(0, 12);
+  const body = st.sections.filter((s) => !isConc(s) && s.text.length > 300).slice(0, 14);
   const concSec = st.sections.find(isConc);
-  const total = body.length + 2;
+  const jobs = body.map((s) => ({ s, parts: o.chunk && s.text.length > MAXC ? splitChunks(s.text, MAXC) : [condense(s.text, MAXC)] }));
+  const calls = jobs.reduce((n, j) => n + j.parts.length, 0);
+  const total = calls + 2;
   let step = 0;
   const secPoints: { s: Sec; pts: string[]; verbatim: boolean }[] = [];
+  const RULE = id
+    ? 'Perhatikan siapa atau apa yang dimaksud tiap angka dan tulis subjeknya persis seperti di teks (misalnya "sesama santri (38%)", bukan "oknum (38%)"). Jangan membalik atau melembutkan makna.'
+    : 'Keep exactly who or what each number refers to, as worded in the text. Never reverse or soften the meaning.';
 
-  if (o.perSection) for (const s of body) {
-    o.check(); o.step((step++ / total) * 0.9, `Merangkum bagian ${step}/${body.length}`);
-    const src = condense(s.text, 3200);
-    const u = id
-      ? `Ringkas bagian berikut menjadi ${c.bullets} poin singkat. Satu kalimat per poin, awali tiap poin dengan "- ". Salin semua angka, persentase, nama, dan istilah persis seperti di teks. Jangan menambah apa pun di luar teks.\n\nBagian: ${s.title}\n\n${src}`
-      : `Summarize the following section in ${c.bullets} short bullet points, one sentence each, each starting with "- ". Copy all numbers, percentages, names and terms exactly. Add nothing that is not in the text.\n\nSection: ${s.title}\n\n${src}`;
-    const out = await ask(SYS, u, 280);
-    const pts = bullets(out).slice(0, c.bullets + 1);
-    if (pts.length && guard(pts.join(' '), src)) secPoints.push({ s, pts, verbatim: false });
-    else secPoints.push({ s, pts: summarize(s.text, c.pts), verbatim: true });
+  if (o.perSection) for (const j of jobs) {
+    const pts: string[] = []; let verbatim = false;
+    for (const src of j.parts) {
+      o.check(); o.step((step++ / total) * 0.9, `Merangkum bagian ${j.s.title.slice(0, 40)} (${step}/${calls})`);
+      const n = j.parts.length > 1 ? Math.max(2, Math.ceil((c.bullets * 1.5) / j.parts.length)) : c.bullets;
+      const u = id
+        ? `Ringkas bagian berikut menjadi ${n} poin singkat. Satu kalimat per poin, awali tiap poin dengan "- ". Salin semua angka, persentase, nama, dan istilah persis seperti di teks. ${RULE} Jangan menambah apa pun di luar teks.\n\nBagian: ${j.s.title}\n\n${src}`
+        : `Summarize the following section in ${n} short bullet points, one sentence each, each starting with "- ". Copy all numbers, percentages, names and terms exactly. ${RULE} Add nothing that is not in the text.\n\nSection: ${j.s.title}\n\n${src}`;
+      const out = await ask(SYS, u, 280);
+      const got = bullets(out).slice(0, n + 1);
+      if (got.length && guard(got.join(' '), src)) pts.push(...got);
+      else { verbatim = true; pts.push(...summarize(src, 1)); }
+    }
+    secPoints.push({ s: j.s, pts: pts.slice(0, c.bullets * 2), verbatim });
   }
 
   o.check(); o.step(0.9, 'Menyusun intisari');
-  const absSrc = condense([st.abstract, ...(o.perSection ? [] : body.map((b) => b.text)), concSec?.text ?? ''].filter(Boolean).join('\n\n') || fullText(st), 3200);
+  const absSrc = condense([st.abstract, ...(o.perSection ? [] : body.map((b) => b.text)), concSec?.text ?? ''].filter(Boolean).join('\n\n') || fullText(st), MAXC);
   let intisari = await ask(SYS, id
     ? `Tulis satu paragraf intisari (4 sampai 6 kalimat) dari teks berikut: apa masalahnya, bagaimana metodenya, apa temuan utamanya, dan apa kesimpulannya. Hanya dari teks. Salin angka persis.\n\n${absSrc}`
     : `Write one summary paragraph (4 to 6 sentences) from the text below: the problem, the method, the main findings and the conclusion. Use only the text. Copy numbers exactly.\n\n${absSrc}`, 360);
@@ -131,7 +148,7 @@ export async function llmReport(st: Struct, o: LlmOpts): Promise<{ md: string; f
   let conc: string[] = [];
   if (concSec) {
     o.check(); o.step(0.96, 'Menyusun kesimpulan');
-    const src = condense(concSec.text, 3000);
+    const src = condense(concSec.text, Math.round(MAXC * 0.95));
     const out = await ask(SYS, id
       ? `Tulis ${Math.min(5, c.bullets + 1)} poin kesimpulan dari teks berikut. Satu kalimat per poin, awali dengan "- ". Hanya dari teks, salin angka persis.\n\n${src}`
       : `Write ${Math.min(5, c.bullets + 1)} conclusion bullet points from the text below, one sentence each, each starting with "- ". Use only the text; copy numbers exactly.\n\n${src}`, 320);
@@ -139,7 +156,8 @@ export async function llmReport(st: Struct, o: LlmOpts): Promise<{ md: string; f
     conc = pts.length && guard(pts.join(' '), src) ? pts : summarize(concSec.text, c.conc);
   }
   const fail = failed ? ` ${failed} panggilan model gagal (pertama: ${firstErr}; terakhir: ${lastErr}); bagian itu diganti kutipan langsung dari dokumen.` : '';
-  const note = `Ditulis ulang oleh model AI di perangkat Anda.${fail} Semua angka diperiksa terhadap teks sumber; ${fallback ? `${fallback} dari ${checked} bagian memuat angka yang tidak ditemukan di teks, sehingga diganti kutipan langsung dari dokumen.` : 'tidak ada angka yang menyimpang.'} Tetap periksa kembali, AI bisa keliru menafsirkan. Untuk kutipan akademik, rujuk dokumen asli.`;
+  const where = o.where === 'server' ? 'Ditulis ulang oleh model AI di server yang Anda tentukan (teks dokumen dikirim ke sana, bukan file PDF-nya).' : 'Ditulis ulang oleh model AI di perangkat Anda.';
+  const note = `${where}${fail} Semua angka diperiksa terhadap teks sumber; ${fallback ? `${fallback} dari ${checked} bagian memuat angka yang tidak ditemukan di teks, sehingga diganti kutipan langsung dari dokumen.` : 'tidak ada angka yang menyimpang.'} Tetap periksa kembali, AI bisa keliru menafsirkan. Untuk kutipan akademik, rujuk dokumen asli.`;
   if (failed > 0 && failed === asked) throw new Error(`Model AI gagal menjawab (pertama: ${firstErr}; terakhir: ${lastErr}). Coba muat ulang halaman atau pilih ukuran model lain.`);
   return { md: assemble(st, o, intisari, secPoints, conc, note), fallback, checked };
 }
