@@ -57,6 +57,8 @@ export async function chromeDetect(text: string): Promise<string | null> {
 
 /* ---------- WebLLM (WebGPU) ---------- */
 import { cachedModelIds, ensurePersist, removeModels, storageInfo } from './storage';
+import { isGpuFailure, markGpuBad, probeWebGpu } from './gpuGuard';
+export { GPU_FALLBACK_MSG, isGpuFailure, probeWebGpu, runWithGpuFallback } from './gpuGuard';
 
 /** Versi pustaka dikunci sekali (disimpan di perangkat) agar alamat berkasnya tetap sama dan cache tidak basi. */
 const VER_KEY = 'mab-webllm-ver';
@@ -125,6 +127,8 @@ async function createRaw(tier: Tier, onProgress: Progress): Promise<{ eng: any; 
 /** Pembungkus stabil: bila mesin rusak (model dibuang / GPU di-reset), isinya diganti mesin baru tanpa mengubah rujukan pemanggil. */
 export async function loadWebLLM(tier: Tier, onProgress: Progress): Promise<any> {
   if (!hasWebGPU()) throw new Error('Browser ini belum mendukung WebGPU. Coba Chrome atau Edge terbaru di laptop/desktop.');
+  const gpu = await probeWebGpu();
+  if (!gpu.ok) throw new Error('WebGPU tidak tersedia: ' + (gpu.reason ?? 'GPU bermasalah'));
   let p = engines.get(tier);
   if (p) { touch(); return p; }
   for (const [t, e] of engines) if (t !== tier) { e.then((x) => x.unload?.()).catch(() => {}); engines.delete(t); }
@@ -134,7 +138,7 @@ export async function loadWebLLM(tier: Tier, onProgress: Progress): Promise<any>
     const proxy: any = new Proxy(w, { get: (t, k) => (k in t ? t[k] : typeof t.__cur?.[k] === 'function' ? t.__cur[k].bind(t.__cur) : t.__cur?.[k]) });
     touch();
     return proxy;
-  })().catch((e) => { engines.delete(tier); throw e; });
+  })().catch((e) => { engines.delete(tier); if (isGpuFailure(e)) markGpuBad(); throw e; });
   engines.set(tier, p);
   return p;
 }
@@ -158,7 +162,8 @@ export async function llm(engine: any, system: string, user: string, maxTokens =
     try { return await run(); } catch (e: any) {
       const msg = String(e?.message || e);
       console.warn('[MAB-AI] kesalahan model:', msg, e);
-      if (attempt < 2 && /not loaded|disposed|lost|reload\(/i.test(msg) && engine?.__tier) { console.warn('[MAB-AI] membuat ulang mesin, percobaan', attempt + 1); await recoverEngine(engine); continue; }
+      if (isGpuFailure(e)) markGpuBad();
+      if (attempt < 2 && /not loaded|disposed|lost|reload\(/i.test(msg) && !/DEVICE_REMOVED|DXGI/i.test(msg) && engine?.__tier) { console.warn('[MAB-AI] membuat ulang mesin, percobaan', attempt + 1); await recoverEngine(engine); continue; }
       throw e;
     }
   }
